@@ -24,6 +24,7 @@ import '../services/token_estimate.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
+import '../widgets/lightbox.dart';
 import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/fallback_prompt_card.dart';
@@ -3978,13 +3979,34 @@ class _BackdropImage extends StatelessWidget {
         errorBuilder: (_, e, st) => const SizedBox.shrink(),
       );
     }
-    final bytes = _decode();
-    if (bytes == null) return const SizedBox.shrink();
-    return Image.memory(
-      bytes,
+    // Inline base64 (custom background): keep the cached decode — this widget
+    // rebuilds on every streamed chunk / keystroke, and re-decoding a large
+    // data: URL each frame would jank.
+    if (dataUrl.startsWith('data:')) {
+      final bytes = _decode();
+      if (bytes == null) return const SizedBox.shrink();
+      return Image.memory(
+        bytes,
+        fit: fit,
+        gaplessPlayback: true,
+        alignment: alignment,
+      );
+    }
+    // Wave CY.18.268: everything else — a `pyre://attachment/<hash>` ref
+    // (the character/persona AVATAR background, the default source since the
+    // Wave 64 attachment migration), an http URL, or raw base64 — resolves
+    // through the SAME single-source-of-truth resolver avatars + galleries
+    // use, so an avatar background renders identically to its thumbnail.
+    // Before this branch, _BackdropImage only knew data: + asset:, so every
+    // avatar-sourced backdrop silently fell through to a blank theme.
+    final provider = Lightbox.resolveImage(dataUrl);
+    if (provider == null) return const SizedBox.shrink();
+    return Image(
+      image: provider,
       fit: fit,
       gaplessPlayback: true,
       alignment: alignment,
+      errorBuilder: (_, e, st) => const SizedBox.shrink(),
     );
   }
 }
