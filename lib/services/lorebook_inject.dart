@@ -8,6 +8,8 @@
 //
 // Wave CB.
 
+import 'dart:math';
+
 import '../models/models.dart';
 
 /// Combine the three sources of bound lorebooks for [chat] (per-chat,
@@ -95,8 +97,9 @@ class LorebookScanResult {
 /// Matching rules:
 ///   - `entry.enabled == false` → skipped (counted in skippedDisabled)
 ///   - `entry.constant == true` → ALWAYS fires, no keyword scan
-///   - otherwise: case-insensitive WORD-BOUNDARY match across keys; first
-///     hit wins, entry fires once even if multiple keys match
+///   - otherwise: delegated to [evaluateLoreEntryTrigger] (primary
+///     case-insensitive WORD-BOUNDARY match by default, plus optional
+///     secondary-key selective logic + probability, all opt-in per entry)
 ///
 /// Final order: hits sorted by `order` descending (chara_card_v2
 /// convention: higher order = higher injection priority).
@@ -104,12 +107,17 @@ LorebookScanResult scanLorebookHits(
   List<Lorebook> books,
   List<Message> messages, {
   int window = 6,
+  Random? rng,
 }) {
+  // Wave 1.1 (F3): keep the RAW (un-lowercased) window text. Case folding
+  // now happens INSIDE the per-key match so a per-entry `caseSensitive`
+  // override can opt out of it. Default behaviour (caseSensitive == null →
+  // false) still folds case, identical to pre-1.1.
   final windowText = messages.reversed
       .take(window)
       .map((m) => m.text)
-      .join(' ')
-      .toLowerCase();
+      .join(' ');
+  final roller = rng ?? Random();
   final hits = <LoreEntry>[];
   final trace = <String>[];
   var totalScanned = 0;
@@ -126,17 +134,14 @@ LorebookScanResult scanLorebookHits(
         trace.add('${book.name} • constant entry');
         continue;
       }
-      String? matchedKey;
-      for (final k in e.keys) {
-        if (k.isEmpty) continue;
-        if (_keyMatchesAtWordBoundary(windowText, k)) {
-          matchedKey = k;
-          break;
-        }
-      }
-      if (matchedKey != null) {
+      final decision = evaluateLoreEntryTrigger(
+        windowText,
+        e,
+        roll: (max) => roller.nextInt(max),
+      );
+      if (decision.triggered) {
         hits.add(e);
-        trace.add('${book.name} • matched `$matchedKey`');
+        trace.add('${book.name} • ${decision.reason}');
       }
     }
   }
@@ -147,6 +152,117 @@ LorebookScanResult scanLorebookHits(
     totalScanned: totalScanned,
     skippedDisabled: skippedDisabled,
   );
+}
+
+/// Outcome of [evaluateLoreEntryTrigger] — whether the entry fires plus a
+/// short human-readable reason for the diagnostic trace.
+class LoreTriggerDecision {
+  final bool triggered;
+  final String reason;
+  const LoreTriggerDecision(this.triggered, this.reason);
+}
+
+/// Wave 1.1 (F3): pure per-entry trigger decision for a NON-constant,
+/// ENABLED entry. (Constant + disabled handling stays in [scanLorebookHits]
+/// because they short-circuit the scan and the trace wording differs.)
+///
+/// Logic, layered so that the pre-1.1 path is byte-for-byte unchanged:
+///   1. Primary match — at least one of [LoreEntry.keys] is present in
+///      [text], using the entry's case/whole-word overrides (defaulting to
+///      case-insensitive whole-word, today's behaviour). No primary match →
+///      never fires.
+///   2. Selective logic — ONLY when [LoreEntry.secondaryKeys] is non-empty,
+///      combine the secondary presence with the primary match per
+///      [LoreEntry.selectiveLogic]. Empty secondary keys → primary decides
+///      alone (unchanged from today).
+///   3. Probability — ONLY when [LoreEntry.useProbability] is true, roll
+///      `roll(100)` (0..99) and fire iff `roll < probability`. `>= 100`
+///      always fires, `<= 0` never. When useProbability is false the entry
+///      always fires on a logic match (unchanged from today).
+///
+/// [roll] is injected for deterministic tests; production passes a real
+/// `Random().nextInt`. It is only consulted when probability would actually
+/// gate the result, so a pure-match test never needs to supply it.
+LoreTriggerDecision evaluateLoreEntryTrigger(
+  String text,
+  LoreEntry entry, {
+  int Function(int max)? roll,
+}) {
+  final caseSensitive = entry.caseSensitive ?? false;
+  final wholeWords = entry.matchWholeWords ?? true;
+
+  String? matchedKey;
+  for (final k in entry.keys) {
+    if (k.isEmpty) continue;
+    if (_keyMatches(text, k,
+        caseSensitive: caseSensitive, wholeWords: wholeWords)) {
+      matchedKey = k;
+      break;
+    }
+  }
+  if (matchedKey == null) {
+    return const LoreTriggerDecision(false, 'no primary key matched');
+  }
+
+  // Selective logic on secondary keys (only when present).
+  var reason = 'matched `$matchedKey`';
+  final secondaries =
+      entry.secondaryKeys.where((s) => s.isNotEmpty).toList(growable: false);
+  if (secondaries.isNotEmpty) {
+    final present = <String>[];
+    final absent = <String>[];
+    for (final s in secondaries) {
+      if (_keyMatches(text, s,
+          caseSensitive: caseSensitive, wholeWords: wholeWords)) {
+        present.add(s);
+      } else {
+        absent.add(s);
+      }
+    }
+    final bool selectivePass;
+    switch (entry.selectiveLogic) {
+      case LoreSelectiveLogic.andAny:
+        selectivePass = present.isNotEmpty;
+        break;
+      case LoreSelectiveLogic.andAll:
+        selectivePass = absent.isEmpty;
+        break;
+      case LoreSelectiveLogic.notAny:
+        selectivePass = present.isEmpty;
+        break;
+      case LoreSelectiveLogic.notAll:
+        selectivePass = absent.isNotEmpty;
+        break;
+    }
+    if (!selectivePass) {
+      return LoreTriggerDecision(
+        false,
+        'primary `$matchedKey` matched but secondary logic '
+        '(${entry.selectiveLogic.name}) failed',
+      );
+    }
+    reason = 'matched `$matchedKey` + secondary (${entry.selectiveLogic.name})';
+  }
+
+  // Probability gate (only when explicitly enabled).
+  if (entry.useProbability) {
+    final p = entry.probability;
+    if (p <= 0) {
+      return const LoreTriggerDecision(false, 'probability 0% — skipped');
+    }
+    if (p < 100) {
+      final rollFn = roll ?? Random().nextInt;
+      final value = rollFn(100); // 0..99
+      if (value >= p) {
+        return LoreTriggerDecision(
+            false, 'probability roll $value >= $p% — skipped');
+      }
+      reason = '$reason (probability roll $value < $p%)';
+    }
+    // p >= 100 → always fire.
+  }
+
+  return LoreTriggerDecision(true, reason);
 }
 
 /// Wave CY.18.255 (FIX 4): word-boundary keyword match.
@@ -166,17 +282,28 @@ LorebookScanResult scanLorebookHits(
 /// differently from a 4-char one, and it matches the chara_card_v2 /
 /// SillyTavern whole-word convention.
 ///
-/// Implementation: case-insensitive `(?<![A-Za-z0-9])KEY(?![A-Za-z0-9])`
-/// with the key escaped. Lookarounds (not `\b`) so keys that START or END
-/// with a non-word character — punctuation, emoji, CJK — still match
-/// (a bare `\b` would wrongly fail there, since `\b` needs a word char on
-/// one side). [text] is already lowercased by the caller; we lowercase the
-/// key here for parity and keep the regex case-insensitive defensively.
-bool _keyMatchesAtWordBoundary(String text, String key) {
-  final lower = key.toLowerCase();
-  final pattern = RegExp(
-    '(?<![A-Za-z0-9])${RegExp.escape(lower)}(?![A-Za-z0-9])',
-    caseSensitive: false,
-  );
-  return pattern.hasMatch(text);
+/// Implementation: `(?<![A-Za-z0-9])KEY(?![A-Za-z0-9])` with the key escaped.
+/// Lookarounds (not `\b`) so keys that START or END with a non-word character
+/// — punctuation, emoji, CJK — still match (a bare `\b` would wrongly fail
+/// there, since `\b` needs a word char on one side).
+///
+/// Wave 1.1 (F3): generalised from the old `_keyMatchesAtWordBoundary` to
+/// honour per-entry overrides. The DEFAULTS reproduce the pre-1.1 path
+/// exactly:
+///   - [caseSensitive] `false` → `caseSensitive: false` regex (today).
+///   - [wholeWords] `true` → the boundary lookarounds (today).
+/// When [wholeWords] is false the key matches anywhere (raw substring /
+/// `contains`-style) — the old short-key over-matching behaviour, opted into
+/// deliberately per entry.
+bool _keyMatches(
+  String text,
+  String key, {
+  bool caseSensitive = false,
+  bool wholeWords = true,
+}) {
+  final escaped = RegExp.escape(key);
+  final pattern = wholeWords
+      ? '(?<![A-Za-z0-9])$escaped(?![A-Za-z0-9])'
+      : escaped;
+  return RegExp(pattern, caseSensitive: caseSensitive).hasMatch(text);
 }

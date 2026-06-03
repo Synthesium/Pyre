@@ -100,13 +100,24 @@ Map<String, dynamic> _charaCardBookEntry(LoreEntry e, int index) {
   return <String, dynamic>{
     'id': index,
     'keys': e.keys,
-    'secondary_keys': <String>[],
+    // chara_card_v2 spec name; also mirrored as ST's `keysecondary` below so
+    // both Pyre's importer and SillyTavern read the secondary keys back.
+    'secondary_keys': e.secondaryKeys,
+    'keysecondary': e.secondaryKeys,
     'comment': '',
     'content': e.content,
     'constant': e.constant,
     // `selective` (chara_card_v2): the entry fires only on a key match —
     // true for keyed entries, false for an always-on (constant) overview.
-    'selective': !e.constant && e.keys.isNotEmpty,
+    // Wave 1.1 (F3): secondary keys imply a selective entry too.
+    'selective': !e.constant && (e.keys.isNotEmpty || e.secondaryKeys.isNotEmpty),
+    // Wave 1.1 (F3): SillyTavern "selective" keyword options. Emitted with
+    // the ST field names so a round-trip (export → re-import) preserves them.
+    'selectiveLogic': loreSelectiveLogicToSt(e.selectiveLogic),
+    'caseSensitive': e.caseSensitive,
+    'matchWholeWords': e.matchWholeWords,
+    'probability': e.probability,
+    'useProbability': e.useProbability,
     'insertion_order': e.order,
     'enabled': e.enabled,
     'position': 'before_char',

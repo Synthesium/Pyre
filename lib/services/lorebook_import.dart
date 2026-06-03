@@ -123,6 +123,22 @@ Lorebook lorebookFromCharacterBook(
         (m['priority'] as num?)?.toInt() ??
         (m['order'] as num?)?.toInt() ??
         0;
+    // Wave 1.1 (F3): map the SillyTavern "selective" keyword options. All
+    // tolerant + safe-defaulted so a card missing them imports IDENTICALLY
+    // to pre-1.1 (empty secondary keys, andAny, null overrides, prob 100,
+    // useProbability false). `keysecondary` may be absent / a CSV string /
+    // a list — normalise via the same helper as the primary keys.
+    final secondaryKeys = _readKeyList(m['keysecondary']) ??
+        _readKeyList(m['secondary_keys']) ??
+        _readKeyList(m['secondaryKeys']) ??
+        <String>[];
+    final selectiveLogic = loreSelectiveLogicFromSt(m['selectiveLogic']);
+    final caseSensitive = m['caseSensitive'] as bool?;
+    final matchWholeWords = m['matchWholeWords'] as bool?;
+    final probability = (m['probability'] as num?)?.toInt() ?? 100;
+    final useProbability = m['useProbability'] is bool
+        ? m['useProbability'] as bool
+        : false;
     entries.add(LoreEntry(
       id: 'lore_${DateTime.now().millisecondsSinceEpoch}_$i',
       keys: keys,
@@ -130,6 +146,12 @@ Lorebook lorebookFromCharacterBook(
       constant: constant,
       enabled: enabled,
       order: order,
+      secondaryKeys: secondaryKeys,
+      selectiveLogic: selectiveLogic,
+      caseSensitive: caseSensitive,
+      matchWholeWords: matchWholeWords,
+      probability: probability,
+      useProbability: useProbability,
     ));
   }
   // Wave CY.18.44: empty-entries diagnostic. Pre-Wave a malformed book

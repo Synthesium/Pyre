@@ -8,6 +8,7 @@
 // must parse.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pyre/models/models.dart';
 import 'package:pyre/services/lorebook_import.dart';
 
 void main() {
@@ -122,6 +123,93 @@ void main() {
     test('non-lorebook JSON returns null', () {
       final book = tryParseLorebookJson(<String, dynamic>{'hello': 'world'});
       expect(book, isNull);
+    });
+  });
+
+  group('Wave 1.1 (F3): ST selective keyword options import', () {
+    test('keysecondary + selectiveLogic=3 + probability=50 + useProbability',
+        () {
+      final json = <String, dynamic>{
+        'name': 'Selective Book',
+        'entries': {
+          '0': {
+            'uid': 0,
+            'key': ['castle'],
+            'keysecondary': ['siege', 'banner'],
+            'content': 'A castle under siege.',
+            'selectiveLogic': 3, // ST AND_ALL
+            'caseSensitive': true,
+            'matchWholeWords': false,
+            'probability': 50,
+            'useProbability': true,
+          },
+        },
+      };
+      final book = tryParseLorebookJson(json)!;
+      final e = book.entries.single;
+      expect(e.keys, contains('castle'));
+      expect(e.secondaryKeys, const ['siege', 'banner']);
+      expect(e.selectiveLogic, LoreSelectiveLogic.andAll);
+      expect(e.caseSensitive, isTrue);
+      expect(e.matchWholeWords, isFalse);
+      expect(e.probability, 50);
+      expect(e.useProbability, isTrue);
+    });
+
+    test('selectiveLogic ints map per ST ordering (1=NOT_ALL, 2=NOT_ANY)', () {
+      Map<String, dynamic> withLogic(int l) => <String, dynamic>{
+            'name': 'b',
+            'entries': [
+              {
+                'key': ['k'],
+                'keysecondary': ['s'],
+                'content': 'c',
+                'selectiveLogic': l,
+              }
+            ],
+          };
+      expect(tryParseLorebookJson(withLogic(0))!.entries.single.selectiveLogic,
+          LoreSelectiveLogic.andAny);
+      expect(tryParseLorebookJson(withLogic(1))!.entries.single.selectiveLogic,
+          LoreSelectiveLogic.notAll);
+      expect(tryParseLorebookJson(withLogic(2))!.entries.single.selectiveLogic,
+          LoreSelectiveLogic.notAny);
+      expect(tryParseLorebookJson(withLogic(3))!.entries.single.selectiveLogic,
+          LoreSelectiveLogic.andAll);
+    });
+
+    test('keysecondary tolerates a CSV string', () {
+      final json = <String, dynamic>{
+        'name': 'b',
+        'entries': [
+          {
+            'key': ['k'],
+            'keysecondary': 'siege, banner ,  ',
+            'content': 'c',
+          }
+        ],
+      };
+      expect(tryParseLorebookJson(json)!.entries.single.secondaryKeys,
+          const ['siege', 'banner']);
+    });
+
+    test('a minimal ST entry (no new fields) imports with safe defaults', () {
+      final json = <String, dynamic>{
+        'name': 'b',
+        'entries': [
+          {
+            'key': ['k'],
+            'content': 'c',
+          }
+        ],
+      };
+      final e = tryParseLorebookJson(json)!.entries.single;
+      expect(e.secondaryKeys, isEmpty);
+      expect(e.selectiveLogic, LoreSelectiveLogic.andAny);
+      expect(e.caseSensitive, isNull);
+      expect(e.matchWholeWords, isNull);
+      expect(e.probability, 100);
+      expect(e.useProbability, isFalse);
     });
   });
 }

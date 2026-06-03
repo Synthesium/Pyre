@@ -1265,13 +1265,97 @@ CreatorPreset buildLockedDefaultCreatorPreset() {
 // ---------------------------------------------------------------------------
 // Lorebook
 
+/// Wave 1.1 (F3): SillyTavern-style "selective" combination logic applied to
+/// an entry's [LoreEntry.secondaryKeys] ON TOP OF the primary-key match. Only
+/// relevant when `secondaryKeys` is non-empty — with no secondary keys the
+/// entry triggers on the primary keys alone (today's behaviour).
+///
+/// Mapping to ST's `selectiveLogic` int (kept in [loreSelectiveLogicFromSt] /
+/// [loreSelectiveLogicToSt]):
+///   0 = AND_ANY  → andAny  (primary AND at least one secondary present)
+///   1 = NOT_ALL  → notAll  (primary AND not all secondaries present)
+///   2 = NOT_ANY  → notAny  (primary AND none of the secondaries present)
+///   3 = AND_ALL  → andAll  (primary AND every secondary present)
+enum LoreSelectiveLogic { andAny, andAll, notAny, notAll }
+
+/// Parse the persisted enum name back to a [LoreSelectiveLogic], defaulting to
+/// `andAny` (the ST default + the safe "secondary present" behaviour) on any
+/// unknown / legacy / missing value.
+LoreSelectiveLogic _parseLoreSelectiveLogic(dynamic v) {
+  if (v is String) {
+    for (final s in LoreSelectiveLogic.values) {
+      if (s.name == v) return s;
+    }
+  }
+  return LoreSelectiveLogic.andAny;
+}
+
+/// Map SillyTavern's `selectiveLogic` integer to [LoreSelectiveLogic]. ST's
+/// ordering is deliberately NOT alphabetical: 0=AND_ANY, 1=NOT_ALL,
+/// 2=NOT_ANY, 3=AND_ALL. Anything else (incl. null) defaults to `andAny`.
+LoreSelectiveLogic loreSelectiveLogicFromSt(dynamic v) {
+  final i = _jInt(v);
+  switch (i) {
+    case 1:
+      return LoreSelectiveLogic.notAll;
+    case 2:
+      return LoreSelectiveLogic.notAny;
+    case 3:
+      return LoreSelectiveLogic.andAll;
+    case 0:
+    default:
+      return LoreSelectiveLogic.andAny;
+  }
+}
+
+/// Inverse of [loreSelectiveLogicFromSt] — used when exporting to ST shape.
+int loreSelectiveLogicToSt(LoreSelectiveLogic logic) {
+  switch (logic) {
+    case LoreSelectiveLogic.andAny:
+      return 0;
+    case LoreSelectiveLogic.notAll:
+      return 1;
+    case LoreSelectiveLogic.notAny:
+      return 2;
+    case LoreSelectiveLogic.andAll:
+      return 3;
+  }
+}
+
 class LoreEntry {
   String id;
-  List<String> keys; // trigger keywords
+  List<String> keys; // trigger keywords (primary)
   String content;
   bool constant; // always-on if true
   bool enabled;
   int order; // higher = more important
+
+  /// Wave 1.1 (F3): optional secondary/qualifier keywords. When empty (the
+  /// default), the entry triggers on [keys] alone — identical to pre-1.1
+  /// behaviour. When non-empty, [selectiveLogic] combines them with the
+  /// primary match (SillyTavern "selective" semantics).
+  List<String> secondaryKeys;
+
+  /// How [secondaryKeys] combine with the primary match. Irrelevant when
+  /// `secondaryKeys` is empty. Default `andAny`.
+  LoreSelectiveLogic selectiveLogic;
+
+  /// Per-entry case-sensitivity override. `null` → use the current default
+  /// (case-INsensitive, i.e. today's behaviour). `true`/`false` force it.
+  bool? caseSensitive;
+
+  /// Per-entry whole-word override. `null` → use the current default
+  /// (whole-word / word-boundary matching, i.e. today's behaviour).
+  /// `false` → substring match; `true` → force whole-word.
+  bool? matchWholeWords;
+
+  /// Percent chance (0–100) the entry activates WHEN its keys match and
+  /// [useProbability] is on. Default 100 (always).
+  int probability;
+
+  /// When false (default), probability is ignored and a key match always
+  /// activates — today's behaviour. When true, [probability] is rolled.
+  bool useProbability;
 
   LoreEntry({
     required this.id,
@@ -1280,7 +1364,14 @@ class LoreEntry {
     this.constant = false,
     this.enabled = true,
     this.order = 0,
-  }) : keys = keys ?? [];
+    List<String>? secondaryKeys,
+    this.selectiveLogic = LoreSelectiveLogic.andAny,
+    this.caseSensitive,
+    this.matchWholeWords,
+    this.probability = 100,
+    this.useProbability = false,
+  })  : keys = keys ?? [],
+        secondaryKeys = secondaryKeys ?? [];
 
   factory LoreEntry.fromJson(Map<String, dynamic> j) => LoreEntry(
         id: j['id'] as String,
@@ -1289,6 +1380,12 @@ class LoreEntry {
         constant: (j['constant'] as bool?) ?? false,
         enabled: (j['enabled'] as bool?) ?? true,
         order: _jInt(j['order']) ?? 0,
+        secondaryKeys: _jStringList(j['secondaryKeys']),
+        selectiveLogic: _parseLoreSelectiveLogic(j['selectiveLogic']),
+        caseSensitive: j['caseSensitive'] as bool?,
+        matchWholeWords: j['matchWholeWords'] as bool?,
+        probability: _jInt(j['probability']) ?? 100,
+        useProbability: (j['useProbability'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1298,6 +1395,16 @@ class LoreEntry {
         'constant': constant,
         'enabled': enabled,
         'order': order,
+        // Wave 1.1 (F3): only emit the new fields when they diverge from the
+        // pre-1.1 defaults, so existing books round-trip byte-identical and
+        // never gain noise. fromJson defaults each back to today's behaviour.
+        if (secondaryKeys.isNotEmpty) 'secondaryKeys': secondaryKeys,
+        if (selectiveLogic != LoreSelectiveLogic.andAny)
+          'selectiveLogic': selectiveLogic.name,
+        if (caseSensitive != null) 'caseSensitive': caseSensitive,
+        if (matchWholeWords != null) 'matchWholeWords': matchWholeWords,
+        if (probability != 100) 'probability': probability,
+        if (useProbability) 'useProbability': useProbability,
       };
 }
 

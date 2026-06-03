@@ -174,6 +174,12 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
                           constant: e.constant,
                           enabled: e.enabled,
                           order: e.order,
+                          secondaryKeys: [...e.secondaryKeys],
+                          selectiveLogic: e.selectiveLogic,
+                          caseSensitive: e.caseSensitive,
+                          matchWholeWords: e.matchWholeWords,
+                          probability: e.probability,
+                          useProbability: e.useProbability,
                         ))
                     .toList(),
               );
@@ -479,8 +485,23 @@ Future<void> _editEntry(
 }) async {
   final store = context.read<AppStore>();
   final keysCtl = TextEditingController(text: entry.keys.join(', '));
+  final secondaryCtl =
+      TextEditingController(text: entry.secondaryKeys.join(', '));
   final contentCtl = TextEditingController(text: entry.content);
   bool constant = entry.constant;
+  // Wave 1.1 (F3): the SillyTavern-style keyword options. Defaults mirror the
+  // model's pre-1.1 defaults so an unchanged entry saves with no new fields.
+  LoreSelectiveLogic logic = entry.selectiveLogic;
+  bool? caseSensitive = entry.caseSensitive;
+  bool? matchWholeWords = entry.matchWholeWords;
+  bool useProbability = entry.useProbability;
+  int probability = entry.probability;
+
+  // Tri-state (Default / On / Off) value helpers for the override toggles.
+  String triLabel(bool? v) => v == null ? 'Default' : (v ? 'On' : 'Off');
+  bool? triNext(bool? v) => v == null
+      ? true
+      : (v ? false : null); // Default -> On -> Off -> Default
 
   await showDialog<void>(
     context: context,
@@ -490,36 +511,143 @@ Future<void> _editEntry(
         title: Text(isNew ? 'New entry' : 'Edit entry'),
         content: SizedBox(
           width: 380,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: keysCtl,
-                decoration: const InputDecoration(
-                  labelText: 'Trigger keywords',
-                  helperText: 'Comma-separated. Ignored if "constant" is on.',
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: keysCtl,
+                  decoration: const InputDecoration(
+                    labelText: 'Trigger keywords',
+                    helperText:
+                        'Comma-separated. Ignored if "constant" is on.',
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: contentCtl,
-                maxLines: 8,
-                minLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Content to inject',
+                const SizedBox(height: 12),
+                TextField(
+                  controller: secondaryCtl,
+                  decoration: const InputDecoration(
+                    labelText: 'Secondary keywords (optional)',
+                    helperText:
+                        'Comma-separated. Combined with the logic below.',
+                  ),
+                  onChanged: (_) => setState(() {}),
                 ),
-              ),
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                title: const Text('Always inject (constant)'),
-                value: constant,
-                activeColor: EmberColors.primary,
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                onChanged: (v) => setState(() => constant = v ?? false),
-              ),
-            ],
+                // The logic dropdown only matters when there are secondary
+                // keywords — show it then (with a hint otherwise).
+                if (secondaryCtl.text.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<LoreSelectiveLogic>(
+                    initialValue: logic,
+                    decoration: const InputDecoration(labelText: 'Logic'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: LoreSelectiveLogic.andAny,
+                        child: Text('Any of these'),
+                      ),
+                      DropdownMenuItem(
+                        value: LoreSelectiveLogic.andAll,
+                        child: Text('All of these'),
+                      ),
+                      DropdownMenuItem(
+                        value: LoreSelectiveLogic.notAny,
+                        child: Text('None of these'),
+                      ),
+                      DropdownMenuItem(
+                        value: LoreSelectiveLogic.notAll,
+                        child: Text('Not all of these'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(
+                        () => logic = v ?? LoreSelectiveLogic.andAny),
+                  ),
+                ] else
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Add secondary keywords to enable AND/NOT logic.',
+                      style: TextStyle(
+                          color: EmberColors.textDim, fontSize: 11),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: contentCtl,
+                  maxLines: 8,
+                  minLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Content to inject',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  title: const Text('Always inject (constant)'),
+                  value: constant,
+                  activeColor: EmberColors.primary,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  onChanged: (v) => setState(() => constant = v ?? false),
+                ),
+                // Matching overrides — tri-state so "Default" keeps today's
+                // behaviour (case-insensitive whole-word).
+                Row(
+                  children: [
+                    const Expanded(child: Text('Case sensitive')),
+                    TextButton(
+                      onPressed: () => setState(
+                          () => caseSensitive = triNext(caseSensitive)),
+                      child: Text(triLabel(caseSensitive)),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Expanded(child: Text('Match whole words')),
+                    TextButton(
+                      onPressed: () => setState(
+                          () => matchWholeWords = triNext(matchWholeWords)),
+                      child: Text(triLabel(matchWholeWords)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  title: const Text('Use trigger chance'),
+                  value: useProbability,
+                  activeThumbColor: EmberColors.primary,
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  onChanged: (v) => setState(() => useProbability = v),
+                ),
+                if (useProbability)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Slider(
+                          value: probability.toDouble().clamp(0, 100),
+                          min: 0,
+                          max: 100,
+                          divisions: 100,
+                          label: '$probability%',
+                          activeColor: EmberColors.primary,
+                          onChanged: (v) =>
+                              setState(() => probability = v.round()),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 44,
+                        child: Text(
+                          '$probability%',
+                          textAlign: TextAlign.end,
+                          style:
+                              const TextStyle(color: EmberColors.textMid),
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -535,8 +663,18 @@ Future<void> _editEntry(
                     .map((s) => s.trim())
                     .where((s) => s.isNotEmpty)
                     .toList()
+                ..secondaryKeys = secondaryCtl.text
+                    .split(',')
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList()
                 ..content = contentCtl.text
-                ..constant = constant;
+                ..constant = constant
+                ..selectiveLogic = logic
+                ..caseSensitive = caseSensitive
+                ..matchWholeWords = matchWholeWords
+                ..useProbability = useProbability
+                ..probability = probability.clamp(0, 100);
               if (isNew) {
                 lore.entries.add(entry);
               }
