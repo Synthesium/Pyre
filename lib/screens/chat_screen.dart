@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -3393,6 +3394,41 @@ class _MessageBubbleState extends State<_MessageBubble> {
       return const SizedBox.shrink();
     }
 
+    // ---------------------------------------------------------------------
+    // Pyre 1.1 — F2: chat bubble customization.
+    //
+    // Resolve the user-tunable look here so the build below stays readable.
+    // Every default reproduces the legacy appearance exactly (bgPanel base,
+    // radius 12, no extra border, no blur) — see ChatSettings docs.
+    // ---------------------------------------------------------------------
+    final int? roleColorArgb =
+        isUser ? chatSettings.userBubbleColor : chatSettings.aiBubbleColor;
+    final Color bubbleBase =
+        roleColorArgb != null ? Color(roleColorArgb) : EmberColors.bgPanel;
+    final Color bubbleColor = isEmptyVariant
+        ? bubbleBase.withValues(alpha: chatSettings.bubbleAlpha * 0.35)
+        : bubbleBase.withValues(alpha: chatSettings.bubbleAlpha);
+    final BorderRadius bubbleRadius =
+        BorderRadius.circular(chatSettings.bubbleCornerRadius);
+    // A user-set border (width > 0) wins. Otherwise keep the legacy logic:
+    // the empty-variant "ghost slot" gets its faint outline, filled bubbles
+    // get none.
+    final Border? bubbleBorder = chatSettings.bubbleBorderWidth > 0
+        ? Border.all(
+            color: chatSettings.bubbleBorderColor != null
+                ? Color(chatSettings.bubbleBorderColor!)
+                : EmberColors.stroke,
+            width: chatSettings.bubbleBorderWidth,
+          )
+        : (isEmptyVariant
+            ? Border.all(
+                color: EmberColors.stroke.withValues(alpha: 0.6),
+                width: 1,
+              )
+            : null);
+    final double bubbleBlur = chatSettings.bubbleBlurSigma;
+    final double bubbleTextScale = chatSettings.bubbleTextScale;
+
     final bubble = GestureDetector(
       onTap: _flashControls,
       onLongPress: widget.onLongPress,
@@ -3411,7 +3447,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
         // onExit fired the moment the cursor moved onto a floating chip (the
         // chips sit in the chipOverhang padding, OUTSIDE this region) — so the
         // "+"/arrows flickered away as you reached for them.
-        child: Container(
+        child: _BubbleSurface(
+          color: bubbleColor,
+          borderRadius: bubbleRadius,
+          border: bubbleBorder,
+          blurSigma: bubbleBlur,
+          textScale: bubbleTextScale,
           constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.92,
             // When the variant is blank (e.g. a freshly-branched user line
@@ -3421,25 +3462,6 @@ class _MessageBubbleState extends State<_MessageBubble> {
             minWidth: isEmptyVariant
                 ? MediaQuery.of(context).size.width * 0.55
                 : 0,
-          ),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            // Empty variants get a dashed-feeling "ghost" treatment — a
-            // faint outlined slot that signals "your alternative goes here".
-            // Filled bubbles use the regular translucent surface.
-            color: isEmptyVariant
-                ? EmberColors.bgPanel
-                    .withValues(alpha: chatSettings.bubbleAlpha * 0.35)
-                : EmberColors.bgPanel
-                    .withValues(alpha: chatSettings.bubbleAlpha),
-            borderRadius: BorderRadius.circular(12),
-            border: isEmptyVariant
-                ? Border.all(
-                    color: EmberColors.stroke.withValues(alpha: 0.6),
-                    width: 1,
-                  )
-                : null,
           ),
           child: isEmptyVariant
               ? Text(
@@ -3805,6 +3827,97 @@ class _MessageBubbleState extends State<_MessageBubble> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Pyre 1.1 — F2: a [TextScaler] that multiplies an existing scaler by a
+/// constant factor, so the bubble "size" control composes WITH (rather than
+/// replaces) the ambient/system text scale.
+class _ComposedTextScaler extends TextScaler {
+  final TextScaler _base;
+  final double _factor;
+  const _ComposedTextScaler(this._base, this._factor);
+
+  @override
+  double scale(double fontSize) => _base.scale(fontSize) * _factor;
+
+  // `textScaleFactor` is abstract on TextScaler and must be implemented, but
+  // the member itself is deprecated — ignore the lint where we delegate to it.
+  @override
+  double get textScaleFactor =>
+      // ignore: deprecated_member_use
+      _base.textScaleFactor * _factor;
+}
+
+/// Pyre 1.1 — F2: the visible message-bubble surface.
+///
+/// Pulled out of [_MessageBubble.build] so the customization wiring (color,
+/// corner radius, border, optional backdrop blur, text scaling) lives in one
+/// place. With the default values it renders exactly like the old inline
+/// `Container` did: a single decorated box, no blur, text at 1.0×.
+///
+/// When [blurSigma] > 0 the bubble's translucent fill is layered OVER a
+/// [BackdropFilter] so the chat background behind the bubble is frosted —
+/// the frost (and the fill, and the content) are all clipped to the rounded
+/// rect via the same [ClipRRect], so nothing bleeds past the corners.
+class _BubbleSurface extends StatelessWidget {
+  final Color color;
+  final BorderRadius borderRadius;
+  final Border? border;
+  final double blurSigma;
+  final double textScale;
+  final BoxConstraints constraints;
+  final Widget child;
+
+  const _BubbleSurface({
+    required this.color,
+    required this.borderRadius,
+    required this.border,
+    required this.blurSigma,
+    required this.textScale,
+    required this.constraints,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Scale ONLY the bubble's own content. At the 1.0 default we add NO
+    // wrapper at all, so the ambient (incl. system accessibility) text scale
+    // passes through untouched — the bubble renders identically to before.
+    // For a non-default scale we compose our multiplier ON TOP of whatever
+    // scaler is already in effect (system scale × bubble scale).
+    Widget content = child;
+    if (textScale != 1.0) {
+      final mq = MediaQuery.of(context);
+      content = MediaQuery(
+        data: mq.copyWith(
+          textScaler: _ComposedTextScaler(mq.textScaler, textScale),
+        ),
+        child: content,
+      );
+    }
+
+    final inner = Container(
+      constraints: constraints,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: borderRadius,
+        border: border,
+      ),
+      child: content,
+    );
+
+    if (blurSigma <= 0) return inner;
+
+    // Frost the area behind the bubble, clipped to its rounded rect.
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+        child: inner,
       ),
     );
   }

@@ -138,4 +138,91 @@ void main() {
       }
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Pyre 1.1 — F2: chat bubble customization (separate user vs AI color,
+  // corner radius, border, blur, text scale).
+  //
+  // The cardinal rule: every new field defaults so the DEFAULT render is
+  // byte-for-byte the legacy look. These tests pin those defaults and the
+  // round-trip so a future change can't silently shift existing users.
+  // -------------------------------------------------------------------------
+  group('ChatSettings bubble customization (F2)', () {
+    test('defaults reproduce the original bubble look', () {
+      final s = ChatSettings();
+      // Colors null → the wiring falls back to EmberColors.bgPanel.
+      expect(s.userBubbleColor, isNull);
+      expect(s.aiBubbleColor, isNull);
+      expect(s.bubbleBorderColor, isNull);
+      // Numeric knobs at their legacy hard-coded values.
+      expect(s.bubbleCornerRadius, 12.0);
+      expect(s.bubbleBorderWidth, 0.0);
+      expect(s.bubbleBlurSigma, 0.0);
+      expect(s.bubbleTextScale, 1.0);
+    });
+
+    test('a default ChatSettings omits the nullable color keys from JSON', () {
+      final j = ChatSettings().toJson();
+      expect(j.containsKey('userBubbleColor'), isFalse);
+      expect(j.containsKey('aiBubbleColor'), isFalse);
+      expect(j.containsKey('bubbleBorderColor'), isFalse);
+      // The numeric knobs are always written, at their defaults.
+      expect(j['bubbleCornerRadius'], 12.0);
+      expect(j['bubbleBorderWidth'], 0.0);
+      expect(j['bubbleBlurSigma'], 0.0);
+      expect(j['bubbleTextScale'], 1.0);
+    });
+
+    test('an OLD saved blob (no F2 keys) loads with the legacy defaults', () {
+      // Simulate a settings JSON written before F2 shipped.
+      final legacy = <String, dynamic>{
+        'deleteBehavior': 'onlyThis',
+        'hideReasoning': true,
+        'bubbleAlpha': 0.55,
+        'backgroundSource': 'characterAvatar',
+        'backgroundOpacity': 0.55,
+        'backgroundFit': 'cover',
+        'askPersonaOnNewChat': true,
+      };
+      final s = ChatSettings.fromJson(legacy);
+      expect(s.userBubbleColor, isNull);
+      expect(s.aiBubbleColor, isNull);
+      expect(s.bubbleBorderColor, isNull);
+      expect(s.bubbleCornerRadius, 12.0);
+      expect(s.bubbleBorderWidth, 0.0);
+      expect(s.bubbleBlurSigma, 0.0);
+      expect(s.bubbleTextScale, 1.0);
+    });
+
+    test('all F2 fields survive a full round-trip', () {
+      final s = ChatSettings(
+        userBubbleColor: 0xFF2A1D17,
+        aiBubbleColor: 0xFF1A2230,
+        bubbleCornerRadius: 18.0,
+        bubbleBorderWidth: 2.0,
+        bubbleBorderColor: 0xFFFF6A3D,
+        bubbleBlurSigma: 6.0,
+        bubbleTextScale: 1.25,
+      );
+      final back = ChatSettings.fromJson(s.toJson());
+      expect(back.userBubbleColor, 0xFF2A1D17);
+      expect(back.aiBubbleColor, 0xFF1A2230);
+      expect(back.bubbleCornerRadius, 18.0);
+      expect(back.bubbleBorderWidth, 2.0);
+      expect(back.bubbleBorderColor, 0xFFFF6A3D);
+      expect(back.bubbleBlurSigma, 6.0);
+      expect(back.bubbleTextScale, 1.25);
+    });
+
+    test('setting only one color leaves the other null (independent)', () {
+      final s = ChatSettings(userBubbleColor: 0xFF152619);
+      final j = s.toJson();
+      expect(j.containsKey('userBubbleColor'), isTrue);
+      expect(j.containsKey('aiBubbleColor'), isFalse);
+
+      final back = ChatSettings.fromJson(j);
+      expect(back.userBubbleColor, 0xFF152619);
+      expect(back.aiBubbleColor, isNull);
+    });
+  });
 }

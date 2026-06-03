@@ -1916,6 +1916,46 @@ class ChatSettings {
   /// play as instead of silently falling through to "no persona".
   bool askPersonaOnNewChat;
 
+  // -------------------------------------------------------------------------
+  // Pyre 1.1 — F2: chat bubble customization (separate user vs AI).
+  //
+  // EVERY field below defaults so the rendered bubble is byte-for-byte the
+  // same look as before this feature shipped — existing users see zero
+  // change unless they opt in. Colors are nullable ARGB ints (null = the
+  // legacy EmberColors.bgPanel base); the numeric knobs default to the old
+  // hard-coded values (radius 12, no border, no blur, text scale 1.0).
+  // -------------------------------------------------------------------------
+
+  /// ARGB int for the USER message bubble base color. null → the legacy
+  /// EmberColors.bgPanel. The bubble's `bubbleAlpha` opacity is applied on
+  /// top of this color at render time.
+  int? userBubbleColor;
+
+  /// ARGB int for the AI / character message bubble base color. null →
+  /// the legacy EmberColors.bgPanel.
+  int? aiBubbleColor;
+
+  /// Corner radius of the message bubble. Default 12.0 matches the old
+  /// hard-coded `BorderRadius.circular(12)`.
+  double bubbleCornerRadius;
+
+  /// Width of an outline drawn around every filled bubble. Default 0.0 =
+  /// no border (same as today — filled bubbles had no stroke). The
+  /// empty-variant "ghost slot" outline is unaffected by this.
+  double bubbleBorderWidth;
+
+  /// ARGB int for the bubble outline color (only used when
+  /// [bubbleBorderWidth] > 0). null → EmberColors.stroke.
+  int? bubbleBorderColor;
+
+  /// Gaussian blur sigma applied to the area BEHIND the bubble (frosted
+  /// glass over busy backgrounds). Default 0.0 = no blur, same as today.
+  double bubbleBlurSigma;
+
+  /// Multiplier on the bubble's message text size. Default 1.0 = unchanged.
+  /// This is the user-facing "bubble size" control.
+  double bubbleTextScale;
+
   ChatSettings({
     this.deleteBehavior = DeleteBehavior.onlyThis,
     this.hideReasoning = true,
@@ -1925,6 +1965,13 @@ class ChatSettings {
     this.backgroundOpacity = 0.55,
     this.backgroundFit = ChatBackgroundFit.cover,
     this.askPersonaOnNewChat = true,
+    this.userBubbleColor,
+    this.aiBubbleColor,
+    this.bubbleCornerRadius = 12.0,
+    this.bubbleBorderWidth = 0.0,
+    this.bubbleBorderColor,
+    this.bubbleBlurSigma = 0.0,
+    this.bubbleTextScale = 1.0,
   });
 
   bool get cascadeDelete => deleteBehavior == DeleteBehavior.thisAndAfter;
@@ -1953,6 +2000,16 @@ class ChatSettings {
       backgroundFit:
           chatBgFitFromNameOrNull(j['backgroundFit']) ?? ChatBackgroundFit.cover,
       askPersonaOnNewChat: (j['askPersonaOnNewChat'] as bool?) ?? true,
+      // F2 bubble customization — every key defaults to the legacy look so
+      // an old saved blob (which has none of these keys) renders identically.
+      userBubbleColor: (j['userBubbleColor'] as num?)?.toInt(),
+      aiBubbleColor: (j['aiBubbleColor'] as num?)?.toInt(),
+      bubbleCornerRadius:
+          (j['bubbleCornerRadius'] as num?)?.toDouble() ?? 12.0,
+      bubbleBorderWidth: (j['bubbleBorderWidth'] as num?)?.toDouble() ?? 0.0,
+      bubbleBorderColor: (j['bubbleBorderColor'] as num?)?.toInt(),
+      bubbleBlurSigma: (j['bubbleBlurSigma'] as num?)?.toDouble() ?? 0.0,
+      bubbleTextScale: (j['bubbleTextScale'] as num?)?.toDouble() ?? 1.0,
     );
   }
 
@@ -2000,6 +2057,16 @@ class ChatSettings {
         'backgroundOpacity': backgroundOpacity,
         'backgroundFit': chatBgFitToName(backgroundFit),
         'askPersonaOnNewChat': askPersonaOnNewChat,
+        // F2 bubble customization. Nullable color keys are OMITTED when null
+        // (matches the customBackgroundDataUrl pattern) so a default install
+        // serialises without them; the numeric knobs are always written.
+        if (userBubbleColor != null) 'userBubbleColor': userBubbleColor,
+        if (aiBubbleColor != null) 'aiBubbleColor': aiBubbleColor,
+        'bubbleCornerRadius': bubbleCornerRadius,
+        'bubbleBorderWidth': bubbleBorderWidth,
+        if (bubbleBorderColor != null) 'bubbleBorderColor': bubbleBorderColor,
+        'bubbleBlurSigma': bubbleBlurSigma,
+        'bubbleTextScale': bubbleTextScale,
       };
 }
 
