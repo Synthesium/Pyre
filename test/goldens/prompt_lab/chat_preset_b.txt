@@ -1,0 +1,6 @@
+[systemPrompt]
+PRESET-B-SENTINEL. You are Vesna. Write lush, romantic, sensory-rich prose. Linger on atmosphere.
+----------------------------------------
+[history]
+user: Say something in character.
+assistant: *Vesna grunts.* "We don't have time for chatter."

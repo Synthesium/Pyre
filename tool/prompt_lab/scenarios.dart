@@ -24,6 +24,8 @@ import 'package:pyre/services/creator_build_prompts.dart' show buildBatchTurns;
 import 'package:pyre/services/creator_render.dart' show renderCard;
 import 'package:pyre/services/creator_schema.dart'
     show CreatorMode, batchesFor;
+import 'package:pyre/services/regex_rules.dart'
+    show RegexRule, RegexStream;
 
 // ---------------------------------------------------------------------------
 // Example-card loading (off disk — binding-free)
@@ -331,6 +333,297 @@ ChatScenario buildChatGroup(ExampleCards ex) {
 }
 
 // ---------------------------------------------------------------------------
+// Pyre 1.1 prompt-feature scenarios (F1 / F3 / F4 / F6)
+// ---------------------------------------------------------------------------
+//
+// Each of these layers ONE 1.1 feature on top of the same bundled-fixture
+// shape used by `chat_single`, so the inspect dump isolates exactly what the
+// feature changes in the assembled prompt. The message arrays are FIXED length
+// (determinism), the LTM checkpoint uses the empty-pathHash legacy sentinel
+// (always-valid), and lookups reuse the example cards.
+
+/// Unique sentinel strings used by the 1.1 scenarios so the inspect assertions
+/// can grep for an exact, collision-free phrase.
+const _kSummarySentinel =
+    'RECAP-SENTINEL: Ren and Vesna reached the Maw and made a fragile truce.';
+const _kLoreEntryContent =
+    'LORE-SENTINEL: The Maw at the bottom of the Gate exhales raw aether that '
+    'warps anything it touches.';
+
+/// **chat_summary_macro** (F1) — a chat WITH an LTM recap and a preset whose
+/// mainPrompt embeds `{{summary}}`. Goal at inspect: the recap text appears
+/// EXACTLY ONCE (at the macro position inside the system prompt) and the
+/// hardcoded "--- Story so far (recap) ---" block is NOT separately emitted.
+ChatScenario buildChatSummaryMacro(ExampleCards ex) {
+  // A checkpoint with a LITERAL summary (no {{user}}/{{char}} macros) so the
+  // recap text is byte-stable through the final name-fill pass — the
+  // assertion can match it verbatim.
+  final checkpoint = MemoryCheckpoint(
+    id: 'pl-sm-mc1',
+    summary: _kSummarySentinel,
+    anchorMessageIdx: 1,
+    pathHash: '', // legacy sentinel → always valid
+    createdAt: 0,
+  );
+
+  final messages = <Message>[
+    _msg('pl-sm-m1', MessageKind.user, 'We made it. Barely.'),
+    _msg('pl-sm-m2', MessageKind.char,
+        '*Vesna nods, jaw tight.* "Barely is still alive. Move."'),
+    _msg('pl-sm-m3', MessageKind.user, '"Where to now?"'),
+  ];
+
+  final preset = Preset(
+    id: 'pl-preset-summary',
+    name: 'Prompt Lab — Summary Macro',
+    // The {{summary}} macro is embedded mid-prompt so the inspect dump shows
+    // the recap injected AT that spot (not at the default hardcoded position).
+    mainPrompt: 'You are {{char}}, a wary delver.\n\n'
+        'Story so far: {{summary}}\n\n'
+        'Stay in character and keep the scene moving.',
+    createdAt: 0,
+  );
+
+  final chat = Chat(
+    id: 'pl-chat-summary',
+    characterIds: [ex.vesna.id],
+    characterSnapshots: {ex.vesna.id: ex.vesna},
+    presetId: preset.id,
+    messages: messages,
+    memoryCheckpoints: [checkpoint],
+    memoryEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  );
+
+  final inputs = ChatPromptInputs(
+    chat: chat,
+    character: ex.vesna,
+    persona: null,
+    preset: preset,
+    responderId: ex.vesna.id,
+    beatsCap: 3,
+    lookupCharacter: _charLookup([ex.vesna, ex.ren]),
+    lookupBook: _bookLookup([ex.world]),
+    inFlightMessageId: null,
+  );
+
+  return ChatScenario(
+    'chat_summary_macro',
+    'F1 {{summary}} macro: a preset mainPrompt embeds {{summary}}; the LTM '
+        'recap is injected at the macro position and the hardcoded recap block '
+        'is suppressed (no double-inject).',
+    inputs,
+  );
+}
+
+/// Build a lorebook with ONE selective entry: primary key "gate",
+/// secondaryKeys ["aether"], selectiveLogic andAll — fires only when BOTH
+/// "gate" AND "aether" appear in the scanned window.
+Lorebook _selectiveLoreBook() => Lorebook(
+      id: 'pl-lb-selective',
+      name: 'Prompt Lab — Selective Lore',
+      entries: [
+        LoreEntry(
+          id: 'pl-le-selective',
+          keys: ['gate'],
+          secondaryKeys: ['aether'],
+          selectiveLogic: LoreSelectiveLogic.andAll,
+          content: _kLoreEntryContent,
+          order: 10,
+        ),
+      ],
+      createdAt: 0,
+      updatedAt: 0,
+    );
+
+ChatScenario _buildLorebookScenario({
+  required String id,
+  required String description,
+  required ExampleCards ex,
+  required List<Message> messages,
+}) {
+  final book = _selectiveLoreBook();
+  final chat = Chat(
+    id: 'pl-chat-$id',
+    characterIds: [ex.vesna.id],
+    characterSnapshots: {ex.vesna.id: ex.vesna},
+    attachedLorebookIds: [book.id],
+    messages: messages,
+    createdAt: 0,
+    updatedAt: 0,
+  );
+  final inputs = ChatPromptInputs(
+    chat: chat,
+    character: ex.vesna,
+    persona: null,
+    preset: null, // fallback branch → lore inlined under "--- Lore ---"
+    responderId: ex.vesna.id,
+    beatsCap: 3,
+    lookupCharacter: _charLookup([ex.vesna, ex.ren]),
+    lookupBook: _bookLookup([book]),
+    inFlightMessageId: null,
+  );
+  return ChatScenario(id, description, inputs);
+}
+
+/// **chat_lorebook_on** (F3) — the window contains BOTH "gate" and "aether",
+/// so the andAll selective entry FIRES. Goal: the entry content is present.
+ChatScenario buildChatLorebookOn(ExampleCards ex) => _buildLorebookScenario(
+      id: 'chat_lorebook_on',
+      description:
+          'F3 selective lore (andAll): chat mentions BOTH "gate" AND "aether" '
+          '→ the selective entry FIRES (content present in the prompt).',
+      ex: ex,
+      messages: <Message>[
+        _msg('pl-lon-m1', MessageKind.user,
+            'I peer down into the gate. The cold aether stings my eyes.'),
+        _msg('pl-lon-m2', MessageKind.char,
+            '*Vesna grabs my arm.* "Don\'t breathe it in."'),
+      ],
+    );
+
+/// **chat_lorebook_off** (F3) — the window contains ONLY "gate" (no "aether"),
+/// so the andAll selective entry does NOT fire. Goal: entry content absent.
+ChatScenario buildChatLorebookOff(ExampleCards ex) => _buildLorebookScenario(
+      id: 'chat_lorebook_off',
+      description:
+          'F3 selective lore (andAll): chat mentions ONLY "gate" (no "aether") '
+          '→ the selective entry does NOT fire (content absent from the prompt).',
+      ex: ex,
+      messages: <Message>[
+        _msg('pl-loff-m1', MessageKind.user,
+            'I peer down into the gate. It is dark all the way down.'),
+        _msg('pl-loff-m2', MessageKind.char,
+            '*Vesna grabs my arm.* "Don\'t lean so far."'),
+      ],
+    );
+
+/// **chat_regex** (F4) — a non-destructive prompt-stage regex on the userInput
+/// stream: `\bcolour\b` /gi → "color". The latest user turn contains "colour".
+/// Goal: the OUTGOING user message reads "color" (transformed in-flight) while
+/// the SOURCE fixture text still says "colour" (storage untouched).
+ChatScenario buildChatRegex(ExampleCards ex) {
+  final messages = <Message>[
+    _msg('pl-rx-m1', MessageKind.char,
+        '*Vesna eyes the strange moss.* "Tell me what you see."'),
+    // The latest user turn carries the British spelling the rule rewrites.
+    _msg('pl-rx-m2', MessageKind.user,
+        'The moss is a sickly colour, and the Colour deepens near the water.'),
+  ];
+
+  final chat = Chat(
+    id: 'pl-chat-regex',
+    characterIds: [ex.vesna.id],
+    characterSnapshots: {ex.vesna.id: ex.vesna},
+    messages: messages,
+    createdAt: 0,
+    updatedAt: 0,
+  );
+
+  final rule = RegexRule(
+    id: 'pl-rx-rule',
+    name: 'colour → color',
+    pattern: r'\bcolour\b',
+    flags: 'gi',
+    replacement: 'color',
+    streams: [RegexStream.userInput],
+    affectsPrompt: true,
+    affectsDisplay: false,
+  );
+
+  final inputs = ChatPromptInputs(
+    chat: chat,
+    character: ex.vesna,
+    persona: null,
+    preset: null,
+    responderId: ex.vesna.id,
+    beatsCap: 3,
+    lookupCharacter: _charLookup([ex.vesna, ex.ren]),
+    lookupBook: _bookLookup([ex.world]),
+    inFlightMessageId: null,
+    regexRules: [rule],
+  );
+
+  return ChatScenario(
+    'chat_regex',
+    'F4 non-destructive regex (userInput, prompt-stage): /\\bcolour\\b/gi → '
+        '"color"; outgoing user turn is transformed, source fixture stays '
+        '"colour".',
+    inputs,
+  );
+}
+
+/// Shared chat shape for the F6 preset-switch pair — same messages + character,
+/// only the [preset] differs, so the inspect dumps differ ONLY in the system
+/// prompt.
+ChatScenario _buildPresetScenario(
+  ExampleCards ex,
+  String id,
+  String description,
+  Preset preset,
+) {
+  final messages = <Message>[
+    _msg('pl-ps-m1', MessageKind.user, 'Say something in character.'),
+    _msg('pl-ps-m2', MessageKind.char,
+        '*Vesna grunts.* "We don\'t have time for chatter."'),
+  ];
+  final chat = Chat(
+    id: 'pl-chat-$id',
+    characterIds: [ex.vesna.id],
+    characterSnapshots: {ex.vesna.id: ex.vesna},
+    presetId: preset.id,
+    messages: messages,
+    createdAt: 0,
+    updatedAt: 0,
+  );
+  final inputs = ChatPromptInputs(
+    chat: chat,
+    character: ex.vesna,
+    persona: null,
+    preset: preset,
+    responderId: ex.vesna.id,
+    beatsCap: 3,
+    lookupCharacter: _charLookup([ex.vesna, ex.ren]),
+    lookupBook: _bookLookup([ex.world]),
+    inFlightMessageId: null,
+  );
+  return ChatScenario(id, description, inputs);
+}
+
+/// **chat_preset_a** (F6) — assemble with preset A.
+ChatScenario buildChatPresetA(ExampleCards ex) => _buildPresetScenario(
+      ex,
+      'chat_preset_a',
+      'F6 preset switch (A): a terse, hardboiled system prompt. Compare the '
+          'system prompt against chat_preset_b — same chat, different preset.',
+      Preset(
+        id: 'pl-preset-a',
+        name: 'Prompt Lab — Preset A',
+        mainPrompt:
+            'PRESET-A-SENTINEL. You are {{char}}. Write terse, hardboiled '
+            'prose. Never use flowery language.',
+        createdAt: 0,
+      ),
+    );
+
+/// **chat_preset_b** (F6) — assemble the SAME chat with a DIFFERENT preset.
+ChatScenario buildChatPresetB(ExampleCards ex) => _buildPresetScenario(
+      ex,
+      'chat_preset_b',
+      'F6 preset switch (B): a lush, romantic system prompt. Compare the '
+          'system prompt against chat_preset_a — same chat, different preset.',
+      Preset(
+        id: 'pl-preset-b',
+        name: 'Prompt Lab — Preset B',
+        mainPrompt:
+            'PRESET-B-SENTINEL. You are {{char}}. Write lush, romantic, '
+            'sensory-rich prose. Linger on atmosphere.',
+        createdAt: 0,
+      ),
+    );
+
+// ---------------------------------------------------------------------------
 // CREATOR scenarios
 // ---------------------------------------------------------------------------
 
@@ -504,10 +797,20 @@ CreatorScenario buildCreatorVision() {
 // Scenario registry
 // ---------------------------------------------------------------------------
 
-/// All chat scenarios, built from the loaded example cards.
+/// All chat scenarios, built from the loaded example cards. The Pyre 1.1
+/// prompt-feature scenarios (F1/F3/F4/F6) sit alongside the originals so they
+/// dump under `inspect` and can be `--dart-define=scenario=<id>`-selected under
+/// `live` without any extra wiring.
 List<ChatScenario> buildChatScenarios(ExampleCards ex) => [
       buildChatSingle(ex),
       buildChatGroup(ex),
+      // Pyre 1.1 prompt-feature scenarios.
+      buildChatSummaryMacro(ex), // F1
+      buildChatLorebookOn(ex), // F3 (fires)
+      buildChatLorebookOff(ex), // F3 (does not fire)
+      buildChatRegex(ex), // F4
+      buildChatPresetA(ex), // F6 (A)
+      buildChatPresetB(ex), // F6 (B)
     ];
 
 /// All Creator scenarios: the structured-build first batch for each mode

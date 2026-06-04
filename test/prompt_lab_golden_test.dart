@@ -109,20 +109,29 @@ void main() {
     }
   });
 
-  // Sanity: the registry must produce exactly the 6 expected scenario ids, so
+  // Sanity: the registry must produce exactly the expected scenario ids, so
   // a dropped/renamed scenario is caught here (not silently un-golden-ed).
   // Wave CY.18.233: the old marker-cascade edit + review-pass scenarios were
   // removed when the structured-JSON build replaced them.
-  test('all 6 scenarios are covered', () {
+  // Pyre 1.1: 6 prompt-feature scenarios added (F1 {{summary}}, F3 selective
+  // lore on/off, F4 regex, F6 preset A/B) → 12 total.
+  test('all 12 scenarios are covered', () {
     final ids = entries.map((e) => e.key).toSet();
     expect(ids, {
       'chat_single',
       'chat_group',
+      // Pyre 1.1 prompt-feature scenarios.
+      'chat_summary_macro', // F1
+      'chat_lorebook_on', // F3
+      'chat_lorebook_off', // F3
+      'chat_regex', // F4
+      'chat_preset_a', // F6
+      'chat_preset_b', // F6
       'creator_character',
       'creator_scenario',
       'creator_persona',
       'creator_vision',
     });
-    expect(entries.length, 6);
+    expect(entries.length, 12);
   });
 }
