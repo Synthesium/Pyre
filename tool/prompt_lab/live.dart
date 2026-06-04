@@ -24,6 +24,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:pyre/models/models.dart';
+import 'package:pyre/services/prompt_post_processing.dart'
+    show PromptPostProcessing, promptPostProcessingFromString;
 import 'package:pyre/services/memory.dart' show recapLooksComplete;
 import 'package:pyre/services/live_sheet.dart' show parseLiveSheetDelta;
 import 'package:pyre/services/creator_render.dart'
@@ -60,6 +62,7 @@ class LiveConfig {
   final String apiKey;
   final Map<String, dynamic> extraParams;
   final ProviderKind kind;
+  final PromptPostProcessing promptPostProcessing;
 
   const LiveConfig({
     required this.baseUrl,
@@ -67,6 +70,7 @@ class LiveConfig {
     required this.apiKey,
     this.extraParams = const {},
     this.kind = ProviderKind.external_,
+    this.promptPostProcessing = PromptPostProcessing.none,
   });
 
   /// True when the file still carries the example placeholder (the user copied
@@ -78,7 +82,8 @@ class LiveConfig {
   @override
   String toString() =>
       'LiveConfig(baseUrl: $baseUrl, model: $model, kind: ${kind.name}, '
-      'extraParams: ${extraParams.keys.toList()}, apiKey: <redacted>)';
+      'extraParams: ${extraParams.keys.toList()}, '
+      'promptPostProcessing: ${promptPostProcessing.name}, apiKey: <redacted>)';
 }
 
 ProviderKind _kindFromString(Object? raw) {
@@ -126,6 +131,9 @@ LiveConfig parseLiveConfig(String jsonText) {
     apiKey: (m['apiKey'] as String?) ?? '',
     extraParams: extraParams,
     kind: _kindFromString(m['kind']),
+    // Optional key; missing/unknown → none (the codec already defaults).
+    promptPostProcessing:
+        promptPostProcessingFromString(m['promptPostProcessing'] as String?),
   );
 }
 
@@ -150,6 +158,7 @@ ApiProvider providerFromConfig(LiveConfig cfg) => ApiProvider(
       apiKey: cfg.apiKey,
       model: cfg.model,
       extraParams: Map<String, dynamic>.from(cfg.extraParams),
+      promptPostProcessing: cfg.promptPostProcessing,
     );
 
 /// Default sampling for live calls. The harness observes assembly + parsing,

@@ -16,6 +16,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
 import 'package:pyre/services/creator_schema.dart' show CreatorMode;
+import 'package:pyre/services/prompt_post_processing.dart'
+    show PromptPostProcessing;
 
 import '../tool/prompt_lab/live.dart';
 
@@ -74,6 +76,27 @@ void main() {
       final cfg = parseLiveConfig('{ "baseUrl": "https://x", "model": "m" }');
       expect(cfg.apiKey, '');
       expect(cfg.hasPlaceholderKey, isTrue);
+    });
+
+    test('reads promptPostProcessing when present', () {
+      final cfg = parseLiveConfig(
+          '{ "baseUrl": "https://x", "model": "m", '
+          '"apiKey": "sk-K", "promptPostProcessing": "strict" }');
+      expect(cfg.promptPostProcessing, PromptPostProcessing.strict);
+      // It's not secret — the mode shows in toString, the key still doesn't.
+      expect(cfg.toString(), contains('promptPostProcessing: strict'));
+      expect(cfg.toString(), isNot(contains('sk-K')));
+      expect(cfg.toString(), contains('<redacted>'));
+      // And it flows into the built provider.
+      expect(providerFromConfig(cfg).promptPostProcessing,
+          PromptPostProcessing.strict);
+    });
+
+    test('promptPostProcessing defaults to none when the key is absent', () {
+      final cfg = parseLiveConfig('{ "baseUrl": "https://x", "model": "m" }');
+      expect(cfg.promptPostProcessing, PromptPostProcessing.none);
+      expect(providerFromConfig(cfg).promptPostProcessing,
+          PromptPostProcessing.none);
     });
   });
 

@@ -36,6 +36,8 @@ import 'package:pyre/services/chat_prompt_builder.dart';
 import 'package:pyre/services/creator_schema.dart' show CreatorMode;
 import 'package:pyre/services/scene_background.dart'
     show loadSceneManifest, parseClassifierJson;
+import 'package:pyre/services/prompt_post_processing.dart'
+    show promptPostProcessingFromString;
 
 import 'live.dart';
 import 'report.dart';
@@ -44,11 +46,23 @@ import 'scenarios.dart';
 // Optional single-scenario filter via --dart-define=scenario=<id>. Empty = all.
 const _scenarioFilter = String.fromEnvironment('scenario');
 
+// Optional per-run override of the provider's prompt post-processing mode, so the
+// live harness can exercise the reshaping (e.g. --dart-define=postproc=strict).
+// Empty = use whatever local.json specifies (default none).
+const _postprocOverride = String.fromEnvironment('postproc');
+
 void main() {
   final cfg = _loadConfigOrSkip();
   if (cfg == null) return; // missing/placeholder config → graceful no-op above.
 
   final provider = providerFromConfig(cfg);
+  if (_postprocOverride.isNotEmpty) {
+    provider.promptPostProcessing =
+        promptPostProcessingFromString(_postprocOverride);
+    // ignore: avoid_print
+    print('Prompt Lab LIVE: post-processing override → '
+        '${provider.promptPostProcessing.name}');
+  }
   final settings = settingsFromConfig(cfg);
 
   final ex = ExampleCards.load();
