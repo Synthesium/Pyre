@@ -156,6 +156,56 @@ StImportResult parseSillyTavernPreset(String jsonText) {
   final mainPrompt = build(before);
   final postHistory = build(after);
 
+  // Pyre 1.1 (Prompt Manager): in ADDITION to the flatten above, preserve the
+  // MODULAR structure as a list of toggleable PromptBlocks so the user can flip
+  // individual modules on/off without editing text.
+  //
+  // We iterate the SAME `orderList` (the FIRST prompt_order entry — ST's global
+  // default at character_id 100000/100001; per-character overrides come after,
+  // and the flatten above already uses this entry, so blocks + mainPrompt stay
+  // consistent) — or, when there's no prompt_order, the prompts[] insertion
+  // order (orderList falls back to that above, all enabled). Structural markers
+  // and empty-content prompts carry nothing to toggle, so they're skipped. The
+  // result feeds preset.promptBlocks; if no authored content survives the list
+  // stays empty and the preset behaves exactly like a flat one.
+  final blocks = <PromptBlock>[];
+  for (final item in orderList) {
+    final id = item['identifier'] as String?;
+    if (id == null) continue;
+    final p = promptsById[id];
+    if (p == null) continue;
+    // Structural placeholder (chatHistory / charDescription / ...) — no
+    // authored content to toggle.
+    if (p['marker'] == true) continue;
+    final content = p['content'];
+    if (content is! String || content.trim().isEmpty) continue;
+
+    final name = (p['name'] is String && (p['name'] as String).isNotEmpty)
+        ? p['name'] as String
+        : id;
+    final role = (p['role'] is String && (p['role'] as String).isNotEmpty)
+        ? p['role'] as String
+        : 'system';
+    // ST `injection_position`: 0 = relative (rendered in prompt order, before
+    // history) · 1 = in-chat at depth (a post-history reminder / jailbreak).
+    final injectionPosition = item['injection_position'] ?? p['injection_position'];
+    final position = injectionPosition == 1
+        ? PromptBlockPosition.afterHistory
+        : PromptBlockPosition.beforeHistory;
+    // `enabled` from the order entry; default true (the prompts[] fallback path
+    // sets it true above, and a malformed order entry should still show up).
+    final enabled = item['enabled'] != false;
+
+    blocks.add(PromptBlock(
+      id: newId('block'),
+      name: name,
+      content: content,
+      enabled: enabled,
+      role: role,
+      position: position,
+    ));
+  }
+
   // Pull sampling settings — ST uses snake_case + openai-prefix.
   double? readDouble(String key) {
     final v = map[key];
@@ -207,6 +257,10 @@ StImportResult parseSillyTavernPreset(String jsonText) {
     minP: readDouble('min_p'),
     topA: readDouble('top_a'),
     repetitionPenalty: readDouble('repetition_penalty'),
+    // Pyre 1.1: the modular structure (empty when nothing authored survives →
+    // flat behaviour). mainPrompt/postHistoryInstructions above stay populated
+    // as a safe fallback for any direct reader.
+    promptBlocks: blocks,
     source: 'sillytavern',
   );
 
