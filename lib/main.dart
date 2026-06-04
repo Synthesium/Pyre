@@ -639,6 +639,24 @@ class _MultipliedTextScaler extends TextScaler {
   @override
   // ignore: deprecated_member_use
   double get textScaleFactor => _base.textScaleFactor * _factor;
+
+  // Value equality is LOAD-BEARING. Without it, a fresh instance is built on
+  // every _UiScaleWrap rebuild and is never == the previous one, so
+  // MediaQuery.updateShouldNotify fires every rebuild and rebuilds the WHOLE
+  // subtree. At uiScale != 1.0 on DESKTOP, a window resize/maximize emits a
+  // burst of metrics-changed frames → that turns into a rebuild storm that
+  // wedges the UI thread ("Not responding"). Equal config => equal scaler =>
+  // MediaQuery stays quiet. (At uiScale == 1.0 _UiScaleWrap is a no-op, which
+  // is why the hang only showed once the slider was moved off 100%.)
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is _MultipliedTextScaler &&
+          other._base == _base &&
+          other._factor == _factor);
+
+  @override
+  int get hashCode => Object.hash(_base, _factor);
 }
 
 /// Wave CY.18.159: F11 fullscreen toggle (desktop). Best-effort — swallows
