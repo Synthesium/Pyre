@@ -20,6 +20,7 @@ import 'chat_settings_screen.dart';
 import 'lorebooks_screen.dart';
 import 'about_pyre_screen.dart';
 import 'desktop_shortcuts_screen.dart';
+import 'st_bulk_import_flow.dart';
 import 'storage_screen.dart';
 
 class MoreScreen extends StatelessWidget {
@@ -123,6 +124,19 @@ class MoreScreen extends StatelessWidget {
                 MaterialPageRoute(
                     builder: (_) => const BackupRestoreScreen()),
               ),
+            ),
+            // Pyre 1.1 (F7): bulk "Import from SillyTavern". One entry where
+            // the user multi-selects a pile of mixed ST `.json` files (+ `.png`
+            // cards); Pyre auto-detects each file's type and routes it to the
+            // right existing importer (World Info / regex / presets / cards),
+            // then shows a per-file summary.
+            _MoreRow(
+              label: 'Import from SillyTavern',
+              subtitle:
+                  'Bulk-import World Info, regex, presets, and cards exported '
+                  'from SillyTavern. Pyre detects each file\'s type '
+                  'automatically.',
+              onTap: () => runStBulkImport(context, store),
             ),
             // Privacy + About merged into a single full screen. The
             // screen handles the brand summary, the privacy statement,
@@ -357,8 +371,17 @@ class _MoreCard extends StatelessWidget {
 class _MoreRow extends StatelessWidget {
   final String label;
   final String? trailing;
+
+  /// Optional one-line description shown under the label (e.g. the
+  /// "Import from SillyTavern" intro). Null keeps the original single-line row.
+  final String? subtitle;
   final VoidCallback? onTap;
-  const _MoreRow({required this.label, this.trailing, this.onTap});
+  const _MoreRow({
+    required this.label,
+    this.trailing,
+    this.subtitle,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -367,12 +390,31 @@ class _MoreRow extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
         child: Row(
+          crossAxisAlignment: subtitle == null
+              ? CrossAxisAlignment.center
+              : CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle!,
+                      style: const TextStyle(
+                        color: EmberColors.textMid,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             if (trailing != null) ...[
