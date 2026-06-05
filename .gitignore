@@ -67,3 +67,17 @@ tool/prompt_lab/local.json
 # Release/ is the web-bundle mirror that build_all.ps1 produces — it's a copy
 # of build/web, not source. Never commit it.
 /Release/
+
+# Private outreach / pitch kit — business-development drafts (unsent partner
+# emails, pitch deck, identity-reveal strategy). Local-only; must NEVER ship in
+# the public AGPL repo.
+outreach/
+
+# Internal/private working docs — local-only, must NEVER ship in the public AGPL
+# repo: deploy + store-listing strategy, the internal launch/security checklist,
+# and the superpowers working docs (specs / plans / brainstorms incl. the
+# monetization/partnership strategy + the mega-audit reports). They stay on disk
+# for reference; they just don't go into git / any future push.
+DEPLOY.md
+docs/LAUNCH_CHECKLIST.md
+docs/superpowers/
