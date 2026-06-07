@@ -82,8 +82,16 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter build windows --release
+      # Bundle the web client INTO the desktop build so the LAN server can
+      # self-host the browser UI. pyre_server.dart looks for `web/` next to
+      # the exe; without it the server returns "Route Not Found" at the root
+      # URL and the whole "open it in a browser over LAN" flow is dead.
+      - name: Build + bundle web UI next to the exe
+        run: |
+          flutter build web --release
+          Copy-Item -Path build/web -Destination build/windows/x64/runner/Release/web -Recurse
       # Zip the WHOLE Release folder — the .exe needs its sibling DLLs +
-      # data/ to run; shipping the bare exe is broken.
+      # data/ + web/ to run; shipping the bare exe is broken.
       - name: Zip Windows bundle
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath pyre-windows-x64.zip
       - uses: actions/upload-artifact@v4
@@ -112,6 +120,13 @@ jobs:
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
+      # Bundle the web client INTO the desktop build so the LAN server can
+      # self-host the browser UI (pyre_server.dart looks for `web/` next to
+      # the `pyre` binary). Without it the LAN server 404s at the root URL.
+      - name: Build + bundle web UI next to the binary
+        run: |
+          flutter build web --release
+          cp -r build/web build/linux/x64/release/bundle/web
       - name: Tarball Linux bundle
         run: tar -czf pyre-linux-x64.tar.gz -C build/linux/x64/release/bundle .
       - uses: actions/upload-artifact@v4

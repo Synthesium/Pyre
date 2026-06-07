@@ -2072,7 +2072,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     subtitle: Text(
                       chat.liveSheetEnabled
                           ? 'On — tracking entity state.'
-                          : 'Off — per-chat state tracking.',
+                          : 'Off — state tracking disabled for this chat.',
                       style: const TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
                     ),
@@ -4923,11 +4923,19 @@ class _BubbleSurface extends StatelessWidget {
     if (blurSigma <= 0) return inner;
 
     // Frost the area behind the bubble, clipped to its rounded rect.
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-        child: inner,
+    //
+    // The RepaintBoundary isolates the blur into its own composited layer so it
+    // isn't re-sampled against the moving backdrop on every scroll frame.
+    // Without it, a per-bubble BackdropFilter inside the scrolling message list
+    // flickers on some (GPU-dependent) devices. It's purely a compositing hint
+    // — zero visual change — that stabilises the frost during scroll.
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: inner,
+        ),
       ),
     );
   }

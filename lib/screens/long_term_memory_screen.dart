@@ -180,8 +180,9 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
           _SliderCard(
             label: 'Auto-checkpoint frequency',
             subtitle:
-                'Drop a new checkpoint every N uncovered messages (0 to '
-                'disable across all chats).',
+                'Drop a new checkpoint every N uncovered messages. Set 0 to '
+                'turn OFF auto-checkpoints across all chats — you can still '
+                'make them by hand with "Summarise now".',
             value: _draft.autoEvery.toDouble(),
             min: 0,
             max: 60,

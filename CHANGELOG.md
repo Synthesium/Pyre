@@ -5,6 +5,27 @@ All notable changes to Pyre are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Pyre follows a leading-digit `MAJOR.MINOR.PATCH` version.
 
+## [1.1.1] - 2026-06-07
+
+A hotfix for a critical packaging bug in 1.1.0.
+
+### Fixed
+
+- **LAN web access ("Route Not Found").** The desktop builds shipped without the
+  web client bundled next to the executable, so the built-in LAN server had
+  nothing to serve at its root URL — every device that opened the desktop's
+  address in a browser got "Route Not Found." The desktop builds now bundle the
+  web UI, so starting the LAN server and opening the address in a browser works
+  out of the box. Thanks to the community for the report.
+- **Chat-bubble blur flicker on scroll.** The bubble backdrop blur is now
+  isolated to its own compositing layer, which stops the frost from flickering
+  as the message list scrolls on some (GPU-dependent) devices.
+- **Checkpoints / Live Sheet "still on" confusion.** Clarified that setting the
+  auto-checkpoint frequency to 0 turns off only the *automatic* checkpoints —
+  you can still make them by hand — and the in-chat "Memories" menu now reads
+  "Off — state tracking disabled for this chat." when Live Sheet is disabled,
+  instead of an ambiguous label. Thanks to the community for the reports.
+
 ## [1.1.0] - 2026-06-06
 
 > Draft date — final date set at release.
