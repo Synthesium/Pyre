@@ -75,6 +75,17 @@ void main() {
       );
     });
 
+    test('matches a local server rejecting response_format.type', () {
+      // llama.cpp / strict OpenAI-compat shims only accept json_schema/text
+      // and 4xx our json_object. The build must recognize this as a param-
+      // shape error so it retries without response_format (and latches it off).
+      expect(
+        isUnsupportedParamError(
+            'response_format.type must be a json_schema or text'),
+        isTrue,
+      );
+    });
+
     test('does NOT match a generic auth error', () {
       expect(
         isUnsupportedParamError(

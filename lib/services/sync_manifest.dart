@@ -243,6 +243,7 @@ Map<String, SyncCollectionStat> buildSyncManifest(AppStore store) {
       'characters': [for (final c in store.characters) ref(c.id, c.mtime)],
       'personas': [for (final p in store.personas) ref(p.id, p.mtime)],
       'chats': [for (final c in store.chats) ref(c.id, c.mtime)],
+      'stories': [for (final s in store.stories) ref(s.id, s.mtime)],
       // Locked default preset is rebuilt-from-build + never synced — exclude it
       // so it can't manufacture a false mismatch (mirrors the /pull `!p.locked`).
       'presets': [

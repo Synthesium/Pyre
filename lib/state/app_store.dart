@@ -12,7 +12,8 @@ import '../services/attachment_refs.dart';
 import '../services/attachment_store.dart';
 import '../services/chat_api.dart' show warmUpProvider;
 import '../services/example_seed.dart';
-import '../services/live_sheet.dart' show ensureLiveSheetSeed;
+import '../services/live_sheet.dart'
+    show ensureLiveSheetSeed, ensureStoryLiveSheetSeed;
 import '../services/provider_fallback.dart';
 import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
@@ -169,6 +170,12 @@ class AppStore extends ChangeNotifier {
   int? installedAt;
 
   List<Chat> chats = [];
+
+  /// Story Mode: long-form works split into chapters. Sibling collection to
+  /// [chats] — same sync/tombstone/persist treatment (whole-record LWW on
+  /// `story.mtime`).
+  List<Story> stories = [];
+
   List<Lorebook> lorebooks = [];
 
   /// Wave CY.18.38: user-created character folders. Each folder
@@ -616,6 +623,8 @@ class AppStore extends ChangeNotifier {
           (raw['defaultRegexRulesSeeded'] as bool?) ?? false;
 
       chats = _parseList<Chat>(raw['chats'], 'chats', Chat.fromJson);
+      // Story Mode: additive key — absent on pre-story blobs → empty list.
+      stories = _parseList<Story>(raw['stories'], 'stories', Story.fromJson);
       lorebooks = _parseList<Lorebook>(
           raw['lorebooks'], 'lorebooks', Lorebook.fromJson);
       presets = _parseList<Preset>(
@@ -780,6 +789,9 @@ class AppStore extends ChangeNotifier {
     }
     for (final ch in chats) {
       ch.mtime = clampMtime(stampMtimeIfZero(ch.mtime, ch.updatedAt, mtimeNow), mtimeNow);
+    }
+    for (final s in stories) {
+      s.mtime = clampMtime(stampMtimeIfZero(s.mtime, s.updatedAt, mtimeNow), mtimeNow);
     }
     for (final p in presets) {
       // Preset tracks `createdAt` instead of `updatedAt`.
@@ -1044,6 +1056,27 @@ class AppStore extends ChangeNotifier {
         }
       }
     }
+    // Story Mode: same sweep semantics as chats (snapshots are
+    // self-contained; persona/lorebook ids are kept — synced collections).
+    for (final story in stories) {
+      story.characterIds.removeWhere((id) =>
+          !characterIdSet.contains(id) &&
+          !story.characterSnapshots.containsKey(id));
+      story.characterSnapshots
+          .removeWhere((id, _) => !story.characterIds.contains(id));
+      if (story.presetId != null && !presetIds.contains(story.presetId)) {
+        story.presetId = null;
+      }
+      for (final chapter in story.chapters) {
+        for (final m in chapter.passages) {
+          if (m.characterId != null && m.characterId!.isNotEmpty) {
+            final ok = characterIdSet.contains(m.characterId) ||
+                story.characterSnapshots.containsKey(m.characterId);
+            if (!ok) m.characterId = null;
+          }
+        }
+      }
+    }
   }
 
   /// Wave CY.18.72: physically remove soft-deleted records whose
@@ -1062,6 +1095,7 @@ class AppStore extends ChangeNotifier {
     characters.removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
     personas.removeWhere((p) => p.deleted && p.mtime > 0 && p.mtime < cutoff);
     chats.removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
+    stories.removeWhere((s) => s.deleted && s.mtime > 0 && s.mtime < cutoff);
     presets.removeWhere((p) =>
         p.deleted && !p.locked && p.mtime > 0 && p.mtime < cutoff);
     lorebooks.removeWhere((l) => l.deleted && l.mtime > 0 && l.mtime < cutoff);
@@ -1280,6 +1314,8 @@ class AppStore extends ChangeNotifier {
       // Pyre 1.1: default-regex-rule seed latch (omit when false).
       if (defaultRegexRulesSeeded) 'defaultRegexRulesSeeded': true,
       'chats': chats.map((c) => c.toJson()).toList(),
+      // Story Mode: additive key — old builds ignore it, absent loads as [].
+      'stories': stories.map((s) => s.toJson()).toList(),
       'lorebooks': lorebooks.map((l) => l.toJson()).toList(),
       'presets': presets.map((p) => p.toJson()).toList(),
       'activePresetId': activePresetId,
@@ -2368,6 +2404,7 @@ class AppStore extends ChangeNotifier {
     personas = [];
     activePersonaId = null;
     chats = [];
+    stories = [];
     lorebooks = [];
     presets = [buildLockedDefaultPreset()];
     activePresetId = lockedDefaultPresetId;
@@ -2744,6 +2781,206 @@ class AppStore extends ChangeNotifier {
       if (c.id == id) return c;
     }
     return null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Story Mode — stories and chapters
+  //
+  // Mutator conventions mirror the chat section: envelope edits stamp
+  // `updatedAt` + `mtime` (whole-record LWW sync) and `_bump()`; the
+  // per-token streaming write uses `_bumpStreaming()`; deletes hard-remove
+  // and log a tombstone so the deletion propagates over LAN sync.
+
+  Story? storyById(String id) {
+    for (final s in stories) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
+  /// Create a new story with a frozen snapshot of each cast member (same
+  /// snapshot semantics as [startChatWith]). The first chapter is NOT created
+  /// here — the UI flows straight into the chapter-aim dialog and calls
+  /// [addChapter].
+  Story startStoryWith({
+    required String title,
+    required String premise,
+    required List<Character> cast,
+    String? personaId,
+  }) {
+    final story = Story(
+      id: newId('story'),
+      title: title.trim(),
+      premise: premise.trim(),
+      characterIds: [for (final c in cast) c.id],
+      characterSnapshots: {
+        for (final c in cast) c.id: Character.fromJson(c.toJson()),
+      },
+      personaId: personaId ?? activePersonaId,
+    );
+    // Live Sheet defaults ON for new stories — register the persona + cast
+    // as tracked entities so state tracking starts immediately (mirrors the
+    // startChatWith seed; skips narrator/scenario cards).
+    final seedPersona = (story.personaId != null &&
+            story.personaId != kExplicitNoPersonaId)
+        ? personaById(story.personaId!)
+        : (story.personaId == kExplicitNoPersonaId ? null : activePersona);
+    ensureStoryLiveSheetSeed(
+      story: story,
+      personaName: seedPersona?.name,
+      characters: story.characterSnapshots.values,
+    );
+    story.mtime = DateTime.now().millisecondsSinceEpoch;
+    stories.add(story);
+    _bump();
+    return story;
+  }
+
+  /// Single funnel for story envelope/sub-state edits made outside the
+  /// dedicated mutators (title, premise, cast, lorebook binds, live-sheet
+  /// snapshots, chapter title/aim/summary edits). Mirrors [touchChat].
+  void touchStory(Story story) {
+    story.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    story.mtime = story.updatedAt;
+    _bump();
+  }
+
+  void removeStory(String id) {
+    stories.removeWhere((s) => s.id == id);
+    recordTombstone('story', id);
+    _bump();
+  }
+
+  /// Append a new active chapter. [aim] is the user's intention for the
+  /// chapter; callers should conclude the current active chapter first
+  /// (the writing surface is always the LAST chapter).
+  Chapter addChapter(String storyId, {required String aim, String title = ''}) {
+    final story = storyById(storyId)!;
+    final chapter = Chapter(
+      id: newId('chapter'),
+      title: title.trim(),
+      aim: aim.trim(),
+    );
+    chapter.mtime = DateTime.now().millisecondsSinceEpoch;
+    story.chapters.add(chapter);
+    touchStory(story);
+    return chapter;
+  }
+
+  /// Mark a chapter concluded with its (AI-drafted, user-edited) recap.
+  void concludeChapter(String storyId, String chapterId,
+      {required String summary}) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return;
+    chapter.summary = summary.trim();
+    chapter.status = ChapterStatus.concluded;
+    chapter.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chapter.mtime = chapter.updatedAt;
+    touchStory(story);
+  }
+
+  void reorderChapters(String storyId, int oldIndex, int newIndex) {
+    final story = storyById(storyId);
+    if (story == null) return;
+    if (oldIndex < 0 || oldIndex >= story.chapters.length) return;
+    if (newIndex < 0 || newIndex >= story.chapters.length) return;
+    final chapter = story.chapters.removeAt(oldIndex);
+    story.chapters.insert(newIndex, chapter);
+    touchStory(story);
+  }
+
+  void addPassage(String storyId, String chapterId, Message m) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return;
+    chapter.passages.add(m);
+    _touchChapter(story, chapter);
+  }
+
+  /// Streaming-friendly passage text write — mirrors [updateMessageText]
+  /// (pinned variant index, coalesced notify, debounced persist).
+  void updatePassageText(
+    String storyId,
+    String chapterId,
+    String messageId,
+    String newText, {
+    int? variantIndex,
+  }) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return;
+    final mi = chapter.passages.indexWhere((m) => m.id == messageId);
+    if (mi < 0) return;
+    final msg = chapter.passages[mi];
+    if (msg.variants.isEmpty) {
+      msg.variants.add(newText);
+    } else {
+      final idx = (variantIndex != null &&
+              variantIndex >= 0 &&
+              variantIndex < msg.variants.length)
+          ? variantIndex
+          : msg.selectedVariant;
+      msg.variants[idx] = newText;
+    }
+    msg.mtime = DateTime.now().millisecondsSinceEpoch;
+    chapter.updatedAt = msg.mtime;
+    story.updatedAt = msg.mtime;
+    story.mtime = msg.mtime;
+    _bumpStreaming();
+  }
+
+  /// Add a new (empty) variant to a passage and select it — re-roll target
+  /// for the LAST passage of the active chapter. Returns the new index, or
+  /// -1 when the passage can't be found.
+  int addPassageVariant(String storyId, String chapterId, String messageId) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return -1;
+    final mi = chapter.passages.indexWhere((m) => m.id == messageId);
+    if (mi < 0) return -1;
+    final msg = chapter.passages[mi];
+    msg.variants.add('');
+    msg.selectedVariant = msg.variants.length - 1;
+    _touchChapter(story, chapter);
+    return msg.selectedVariant;
+  }
+
+  void setPassageVariant(
+      String storyId, String chapterId, String messageId, int index) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return;
+    final mi = chapter.passages.indexWhere((m) => m.id == messageId);
+    if (mi < 0) return;
+    final msg = chapter.passages[mi];
+    if (index < 0 || index >= msg.variants.length) return;
+    msg.selectedVariant = index;
+    _touchChapter(story, chapter);
+  }
+
+  void removePassage(String storyId, String chapterId, String messageId) {
+    final story = storyById(storyId);
+    final chapter = _chapterById(story, chapterId);
+    if (story == null || chapter == null) return;
+    chapter.passages.removeWhere((m) => m.id == messageId);
+    _touchChapter(story, chapter);
+  }
+
+  Chapter? _chapterById(Story? story, String chapterId) {
+    if (story == null) return null;
+    for (final c in story.chapters) {
+      if (c.id == chapterId) return c;
+    }
+    return null;
+  }
+
+  void _touchChapter(Story story, Chapter chapter) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    chapter.updatedAt = now;
+    story.updatedAt = now;
+    story.mtime = now;
+    _bump();
   }
 
   // -------------------------------------------------------------------------

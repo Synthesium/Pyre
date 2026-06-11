@@ -32,6 +32,7 @@ import 'models/models.dart' show UiPrefs;
 import 'state/app_store.dart';
 import 'theme.dart';
 import 'screens/chats_screen.dart';
+import 'screens/stories_screen.dart';
 import 'screens/characters_screen.dart';
 import 'screens/discover_screen.dart';
 import 'screens/more_screen.dart';
@@ -744,7 +745,7 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  static const _tabOrder = ['chats', 'characters', 'discover', 'more'];
+  static const _tabOrder = ['chats', 'stories', 'characters', 'discover', 'more'];
 
   // Wave CY.18.150: stable identity for the 4-tab IndexedStack. When the
   // Discover webview flips `wantsFullWidthContent`, the shell rebuilds the
@@ -763,7 +764,9 @@ class _RootShellState extends State<RootShell> {
 
   int _indexFromPref(String pref) {
     final i = _tabOrder.indexOf(pref);
-    return i < 0 ? 1 : i;
+    // Unknown/legacy pref → Characters (kept stable when Stories shifted the
+    // tab indices).
+    return i < 0 ? _tabOrder.indexOf('characters') : i;
   }
 
   @override
@@ -825,6 +828,7 @@ class _RootShellState extends State<RootShell> {
     final Map<String, VoidCallback> actionCallbacks = {
       ShortcutAction.openSettings: () => store.setActiveTab('more'),
       ShortcutAction.newChat: () => store.setActiveTab('characters'),
+      ShortcutAction.openStories: () => store.setActiveTab('stories'),
       ShortcutAction.commandPalette: () {
         final nav = _rootNavKey.currentState;
         if (nav == null) return;
@@ -881,15 +885,18 @@ class _RootShellState extends State<RootShell> {
       ActiveTabGate(
           active: index == 0, childBuilder: (_) => ChatsScreen()),
       ActiveTabGate(
-          active: index == 1, childBuilder: (_) => CharactersScreen()),
+          active: index == 1, childBuilder: (_) => StoriesScreen()),
       ActiveTabGate(
-          active: index == 2, childBuilder: (_) => DiscoverScreen()),
+          active: index == 2, childBuilder: (_) => CharactersScreen()),
       ActiveTabGate(
-          active: index == 3, childBuilder: (_) => MoreScreen()),
+          active: index == 3, childBuilder: (_) => DiscoverScreen()),
+      ActiveTabGate(
+          active: index == 4, childBuilder: (_) => MoreScreen()),
     ];
-    const labels = ['Chats', 'Characters', 'Discover', 'More'];
+    const labels = ['Chats', 'Stories', 'Characters', 'Discover', 'More'];
     const icons = [
       Icons.chat_bubble_outline,
+      Icons.menu_book_outlined,
       Icons.people_outline,
       Icons.explore_outlined,
       Icons.more_horiz,

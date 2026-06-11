@@ -356,6 +356,14 @@ class PyreServer {
             .map((ch) => ch.toJson())
             .toList();
       }
+      if (wanted.contains('stories')) {
+        // Stories sync whole (chapters + passages inline), same whole-record
+        // LWW granularity as chats.
+        updates['stories'] = store.stories
+            .where((s) => s.mtime > since)
+            .map((s) => s.toJson())
+            .toList();
+      }
       if (wanted.contains('presets')) {
         updates['presets'] = store.presets
             .where((p) => p.mtime > since && !p.locked)
@@ -1061,6 +1069,8 @@ class PyreServer {
     'characters',
     'personas',
     'chats',
+    // Story Mode: stories sync whole-record like chats.
+    'stories',
     'presets',
     'lorebooks',
     // Pyre 1.1 (F4): regex find/replace rules.
@@ -1176,6 +1186,16 @@ class PyreServer {
           store.chats[idx] = Chat.fromJson(j);
         } else {
           store.chats.add(Chat.fromJson(j));
+        }
+        return true;
+      case 'stories':
+        final id = j['id'] as String;
+        final idx = store.stories.indexWhere((s) => s.id == id);
+        if (idx >= 0) {
+          if (store.stories[idx].mtime >= incomingMtime) return false;
+          store.stories[idx] = Story.fromJson(j);
+        } else {
+          store.stories.add(Story.fromJson(j));
         }
         return true;
       case 'presets':
@@ -1318,6 +1338,8 @@ class PyreServer {
         return 'persona';
       case 'chats':
         return 'chat';
+      case 'stories':
+        return 'story';
       case 'presets':
         return 'preset';
       case 'lorebooks':
@@ -1363,6 +1385,11 @@ class PyreServer {
         final before = store.chats.length;
         store.chats.removeWhere((c) => c.id == id && c.mtime < tombstoneMtime);
         return store.chats.length != before;
+      case 'story':
+        final before = store.stories.length;
+        store.stories
+            .removeWhere((s) => s.id == id && s.mtime < tombstoneMtime);
+        return store.stories.length != before;
       case 'preset':
         final before = store.presets.length;
         store.presets.removeWhere(

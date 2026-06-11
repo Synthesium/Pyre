@@ -101,6 +101,13 @@ const List<String> _paramErrorSignatures = [
   // Token-cap rename complaints (OpenAI reasoning models).
   'max_completion_tokens',
   'max_tokens',
+  // Structured-output rejections. Some local servers (llama.cpp, koboldcpp,
+  // strict OpenAI-compat shims) only accept `response_format.type` of
+  // `json_schema` / `text` and 4xx on our `json_object` with e.g.
+  // "response_format.type must be a json_schema or text". Any error naming
+  // `response_format` is by definition about that extra field, so dropping
+  // the extras and retrying (which removes response_format) is the right move.
+  'response_format',
 ];
 
 /// Returns true when [scrubbedBody] looks like a provider rejecting the SHAPE

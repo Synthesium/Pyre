@@ -539,17 +539,24 @@ ModelSettings _recapSettings(ModelSettings base) {
 /// Qwen) dumping its whole recap (planning lines and all) — so run
 /// [stripRecapReasoningPreamble] to drop the "The user wants…/I should…/wait…"
 /// scaffolding before it is stored as the checkpoint.
-Future<String> _completeRecapSanitized({
+///
+/// Story Mode: PUBLIC (was `_completeRecapSanitized`) so the chapter
+/// summariser (services/chapter_summary.dart) shares the exact same
+/// transport + reasoning-fallback hygiene instead of copying it.
+/// [debugTag] keys the LlmDebugLog channel ('ltm' for memory, 'chsum' for
+/// chapter summaries).
+Future<String> completeRecapSanitized({
   required ApiProvider provider,
   required ModelSettings settings,
   required List<ChatTurn> messages,
+  String debugTag = 'ltm', // Wave CY.18.214 diagnostics tag
 }) async {
   final rawSink = StringBuffer();
   final result = await completeChatStreamed(
     provider: provider,
     settings: settings,
     messages: messages,
-    debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
+    debugTag: debugTag,
     // Wave CY.18.270: a reasoning-only model (Venice's uncensored Qwen) emits
     // its whole recap in the `<think>` channel; stripping it left '' → "empty
     // reply" → no checkpoint. The recap is internal context (never shown
@@ -637,7 +644,7 @@ Future<MemoryCheckpoint?> generateCheckpoint({
         await Future<void>.delayed(const Duration(milliseconds: 600));
       }
       try {
-        firstChunk = (await _completeRecapSanitized(
+        firstChunk = (await completeRecapSanitized(
           provider: provider,
           settings: _recapSettings(settings),
           messages: turns,
@@ -671,7 +678,7 @@ Future<MemoryCheckpoint?> generateCheckpoint({
       // Append accumulated recap as assistant turn and ask to continue.
       continuationTurns.add(ChatTurn('assistant', accumulated));
       continuationTurns.add(ChatTurn('user', _kRecapContinuePrompt));
-      final chunk = await _completeRecapSanitized(
+      final chunk = await completeRecapSanitized(
         provider: provider,
         settings: _recapSettings(settings),
         messages: continuationTurns,
@@ -737,7 +744,7 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
 
   try {
     // Wave CY.18.160: streaming transport (see generateCheckpoint).
-    final out = await _completeRecapSanitized(
+    final out = await completeRecapSanitized(
       provider: provider,
       settings: _recapSettings(settings),
       messages: turns,

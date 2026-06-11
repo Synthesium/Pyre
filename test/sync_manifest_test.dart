@@ -232,6 +232,27 @@ void main() {
       // Empty-but-present collections still appear (count 0).
       expect(m['personas']!.count, 0);
       expect(m['providers']!.count, 0);
+      expect(m['stories']!.count, 0);
+    });
+
+    test('stories ride the manifest and an edit surfaces as a mismatch', () {
+      AppStore make() {
+        final s = AppStore(storage: _NoopBackend());
+        s.stories.add(Story(id: 's1', title: 'Pyre of Kings', mtime: 10));
+        return s;
+      }
+
+      final a = make();
+      final b = make();
+      expect(buildSyncManifest(a)['stories']!.count, 1);
+      expect(diffManifests(buildSyncManifest(a), buildSyncManifest(b))
+          .allInSync, isTrue);
+
+      b.stories.first.mtime = 11; // edited on b
+      final diff = diffManifests(buildSyncManifest(a), buildSyncManifest(b));
+      expect(diff.allInSync, isFalse);
+      expect(diff.collections.firstWhere((c) => c.name == 'stories').inSync,
+          isFalse);
     });
 
     test('two stores with identical synced contents produce an all-in-sync diff',

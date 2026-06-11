@@ -29,11 +29,14 @@ class ShortcutAction {
   static const newChat = 'newChat';
   static const searchCharacters = 'searchCharacters';
   static const commandPalette = 'commandPalette';
+  // Story Mode: jump to the Stories tab.
+  static const openStories = 'openStories';
 
   /// Ordered list — UI uses this to render rows in a stable sequence.
   static const all = [
     openSettings,
     newChat,
+    openStories,
     searchCharacters,
     commandPalette,
   ];
@@ -165,6 +168,12 @@ final Map<String, ShortcutBinding> kDefaultShortcutBindings = {
     keyId: LogicalKeyboardKey.keyK.keyId,
     ctrl: true,
   ),
+  // Story Mode: Ctrl+Shift+S avoids the universal Ctrl+S "save" reflex.
+  ShortcutAction.openStories: ShortcutBinding(
+    keyId: LogicalKeyboardKey.keyS.keyId,
+    ctrl: true,
+    shift: true,
+  ),
 };
 
 /// Human labels for the Desktop Shortcuts screen + command palette.
@@ -172,6 +181,7 @@ final Map<String, ShortcutBinding> kDefaultShortcutBindings = {
 const Map<String, String> kShortcutActionLabels = {
   ShortcutAction.openSettings: 'Open Settings',
   ShortcutAction.newChat: 'New chat — pick a character',
+  ShortcutAction.openStories: 'Open Stories',
   ShortcutAction.searchCharacters: 'Search characters',
   ShortcutAction.commandPalette: 'Show the command palette',
 };

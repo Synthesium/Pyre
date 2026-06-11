@@ -108,8 +108,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                       '${store.characters.length} cards · incl. avatars + gallery'),
                   _catCheck(_catPersonas, 'Personas',
                       '${store.personas.length} · incl. avatars'),
-                  _catCheck(_catChats, 'Chats',
-                      '${store.chats.length} conversations + memory'),
+                  _catCheck(_catChats, 'Chats & stories',
+                      '${store.chats.length} conversations · ${store.stories.length} stories + memory'),
                   _catCheck(_catLorebooks, 'Lorebooks',
                       '${store.lorebooks.length}'),
                   _catCheck(_catPresets, 'Presets',
@@ -478,6 +478,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     }
     if (include.contains(_catChats)) {
       blob['chats'] = s.chats.map((c) => c.toJson()).toList();
+      // Story Mode: stories ride the Chats category (conversation-like,
+      // user-authored long-form content).
+      blob['stories'] = s.stories.map((st) => st.toJson()).toList();
     }
     if (include.contains(_catLorebooks)) {
       blob['lorebooks'] = s.lorebooks.map((l) => l.toJson()).toList();
@@ -891,6 +894,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     List<Character>? characters;
     List<Persona>? personas;
     List<Chat>? chats;
+    List<Story>? stories;
     List<Lorebook>? lorebooks;
     List<Preset>? presets;
     List<CreatorPreset>? creatorPresets;
@@ -915,6 +919,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       if (raw.containsKey('chats')) {
         chats = ((raw['chats'] as List?) ?? [])
             .map((c) => Chat.fromJson((c as Map).cast<String, dynamic>()))
+            .toList();
+      }
+      if (raw.containsKey('stories')) {
+        stories = ((raw['stories'] as List?) ?? [])
+            .map((s) => Story.fromJson((s as Map).cast<String, dynamic>()))
             .toList();
       }
       if (raw.containsKey('lorebooks')) {
@@ -967,6 +976,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       }
     }
     if (chats != null) s.chats = chats;
+    if (stories != null) s.stories = stories;
     if (lorebooks != null) s.lorebooks = lorebooks;
     if (presets != null) {
       s.presets = presets;

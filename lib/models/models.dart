@@ -1127,6 +1127,229 @@ class Chat {
 }
 
 // ---------------------------------------------------------------------------
+// Story Mode — Stories and Chapters
+//
+// A Story is the writer-facing sibling of [Chat]: a long-form work split into
+// ordered [Chapter]s. Each chapter has its own passage timeline (fresh history
+// per chapter keeps local-model context small); concluded chapters carry a
+// single user-editable [Chapter.summary] that is injected as "the story so
+// far" when writing later chapters. Passages reuse [Message] (voice mapping:
+// scene = narrator, user = the author's persona, char + characterId = a cast
+// member) so they inherit sync metadata, variant re-rolls, and the tolerant
+// JSON decode for free. Story mode is linear: downstreamByVariant never
+// populates and no pathHash machinery applies (live-sheet snapshots use the
+// empty-pathHash always-valid sentinel).
+
+enum ChapterStatus { active, concluded }
+
+ChapterStatus _chapterStatusFromString(String? s) =>
+    s == 'concluded' ? ChapterStatus.concluded : ChapterStatus.active;
+
+class Chapter {
+  String id;
+  /// User-editable; UI falls back to "Chapter N" when blank.
+  String title;
+  /// The user's intention for this chapter, written at chapter start. Guides
+  /// AI generation toward a natural conclusion (injected with anti-rush
+  /// framing, see services/story_prompt_builder.dart).
+  String aim;
+  /// AI-drafted, user-edited recap. Blank until the chapter is concluded.
+  /// First-class field (exactly one per chapter) rather than a
+  /// [MemoryCheckpoint]: concluded chapters are frozen, so there is no
+  /// branch-validity problem to track.
+  String summary;
+  ChapterStatus status;
+  List<Message> passages;
+  int createdAt;
+  int updatedAt;
+  /// LAN sync metadata — see Character.mtime for rationale. Chapter mtime
+  /// reflects envelope edits (title/aim/summary/status); individual passages
+  /// carry their own mtime.
+  int mtime;
+
+  Chapter({
+    required this.id,
+    this.title = '',
+    this.aim = '',
+    this.summary = '',
+    this.status = ChapterStatus.active,
+    List<Message>? passages,
+    int? createdAt,
+    int? updatedAt,
+    this.mtime = 0,
+  })  : passages = passages ?? [],
+        createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch,
+        updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch;
+
+  bool get concluded => status == ChapterStatus.concluded;
+
+  /// User-facing label: the manual [title] when set, else "Chapter N" derived
+  /// from [number] (1-based position in the story).
+  String displayTitle(int number) {
+    final t = title.trim();
+    return t.isNotEmpty ? t : 'Chapter $number';
+  }
+
+  factory Chapter.fromJson(Map<String, dynamic> j) => Chapter(
+        id: (j['id'] as String?) ?? newId('chapter'),
+        title: (j['title'] as String?) ?? '',
+        aim: (j['aim'] as String?) ?? '',
+        summary: (j['summary'] as String?) ?? '',
+        status: _chapterStatusFromString(j['status'] as String?),
+        // Tolerant decode: a corrupt `passages: "..."` (non-list) or junk
+        // entries inside the list vanish cleanly instead of throwing and
+        // wiping the parse (same rationale as _jStringList).
+        passages: (j['passages'] is List ? j['passages'] as List : const [])
+            .whereType<Map>()
+            .map((m) => Message.fromJson(m.cast<String, dynamic>()))
+            .toList(),
+        createdAt: _jTimestamp(j['createdAt']),
+        updatedAt: _jTimestamp(j['updatedAt']),
+        mtime: _jInt(j['mtime']) ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        if (title.trim().isNotEmpty) 'title': title.trim(),
+        'aim': aim,
+        if (summary.isNotEmpty) 'summary': summary,
+        'status': status.name,
+        'passages': passages.map((m) => m.toJson()).toList(),
+        'createdAt': createdAt,
+        'updatedAt': updatedAt,
+        'mtime': mtime,
+      };
+}
+
+class Story {
+  String id;
+  String title;
+  /// Logline / world premise — injected into every generation turn.
+  String premise;
+  List<String> characterIds;
+  Map<String, Character> characterSnapshots; // frozen per story, as in Chat
+  /// null = inherit the global active persona; [kExplicitNoPersonaId] =
+  /// explicitly none (same semantics as [Chat.personaId]).
+  String? personaId;
+  List<String> attachedLorebookIds;
+  /// Inherited (character/persona-bound) book ids the user disabled for THIS
+  /// story — same semantics as [Chat.disabledInheritedLorebookIds].
+  List<String> disabledInheritedLorebookIds;
+  String? presetId;
+  /// Ordered, user-reorderable. The last non-concluded chapter is the active
+  /// writing surface.
+  List<Chapter> chapters;
+  /// Story-wide entity state. Snapshots use the empty pathHash sentinel
+  /// (always valid — stories are linear) and anchor to a passage id.
+  List<LiveSheetSnapshot> liveSheetSnapshots;
+  bool liveSheetEnabled;
+  int createdAt;
+  int updatedAt;
+  /// LAN sync metadata; story mtime reflects envelope edits (title, premise,
+  /// cast, chapter add/reorder/conclude), whole-record LWW.
+  int mtime;
+  bool deleted;
+
+  Story({
+    required this.id,
+    this.title = '',
+    this.premise = '',
+    List<String>? characterIds,
+    Map<String, Character>? characterSnapshots,
+    this.personaId,
+    List<String>? attachedLorebookIds,
+    List<String>? disabledInheritedLorebookIds,
+    this.presetId,
+    List<Chapter>? chapters,
+    List<LiveSheetSnapshot>? liveSheetSnapshots,
+    // Live Sheet defaults ON for freshly-created stories (constructor path);
+    // [Story.fromJson] defaults absent to false, mirroring Chat's split so a
+    // record persisted with the flag off stays off.
+    this.liveSheetEnabled = true,
+    int? createdAt,
+    int? updatedAt,
+    this.mtime = 0,
+    this.deleted = false,
+  })  : characterIds = characterIds ?? [],
+        characterSnapshots = characterSnapshots ?? {},
+        attachedLorebookIds = attachedLorebookIds ?? [],
+        disabledInheritedLorebookIds = disabledInheritedLorebookIds ?? [],
+        chapters = chapters ?? [],
+        liveSheetSnapshots = liveSheetSnapshots ?? [],
+        createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch,
+        updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch;
+
+  /// The chapter currently being written: the last chapter when it is still
+  /// active, else null (all concluded, or no chapters yet).
+  Chapter? get activeChapter {
+    if (chapters.isEmpty) return null;
+    final last = chapters.last;
+    return last.concluded ? null : last;
+  }
+
+  factory Story.fromJson(Map<String, dynamic> j) {
+    final snaps = <String, Character>{};
+    final rawSnaps = j['characterSnapshots'] as Map?;
+    if (rawSnaps != null) {
+      rawSnaps.forEach((k, v) {
+        if (v is Map) {
+          snaps[k as String] = Character.fromJson(v.cast<String, dynamic>());
+        }
+      });
+    }
+    return Story(
+      id: j['id'] as String,
+      title: (j['title'] as String?) ?? '',
+      premise: (j['premise'] as String?) ?? '',
+      characterIds: _jStringList(j['characterIds']),
+      characterSnapshots: snaps,
+      personaId: j['personaId'] as String?,
+      attachedLorebookIds: _jStringList(j['attachedLorebookIds']),
+      disabledInheritedLorebookIds:
+          _jStringList(j['disabledInheritedLorebookIds']),
+      presetId: j['presetId'] as String?,
+      // Tolerant decode — see Chapter.fromJson passages note.
+      chapters: (j['chapters'] is List ? j['chapters'] as List : const [])
+          .whereType<Map>()
+          .map((m) => Chapter.fromJson(m.cast<String, dynamic>()))
+          .toList(),
+      liveSheetSnapshots: (j['liveSheetSnapshots'] is List
+              ? j['liveSheetSnapshots'] as List
+              : const [])
+          .whereType<Map>()
+          .map((m) => LiveSheetSnapshot.fromJson(m.cast<String, dynamic>()))
+          .toList(),
+      liveSheetEnabled: (j['liveSheetEnabled'] as bool?) ?? false,
+      createdAt: _jTimestamp(j['createdAt']),
+      updatedAt: _jTimestamp(j['updatedAt']),
+      mtime: _jInt(j['mtime']) ?? 0,
+      deleted: (j['deleted'] as bool?) ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'premise': premise,
+        'characterIds': characterIds,
+        'characterSnapshots':
+            characterSnapshots.map((k, v) => MapEntry(k, v.toJson())),
+        'personaId': personaId,
+        'attachedLorebookIds': attachedLorebookIds,
+        'disabledInheritedLorebookIds': disabledInheritedLorebookIds,
+        'presetId': presetId,
+        'chapters': chapters.map((c) => c.toJson()).toList(),
+        'liveSheetSnapshots':
+            liveSheetSnapshots.map((s) => s.toJson()).toList(),
+        'liveSheetEnabled': liveSheetEnabled,
+        'createdAt': createdAt,
+        'updatedAt': updatedAt,
+        'mtime': mtime,
+        if (deleted) 'deleted': true,
+      };
+}
+
+// ---------------------------------------------------------------------------
 // Prompt Manager (Pyre 1.1) — composable prompt blocks
 //
 // A flat Preset (`mainPrompt` + `postHistoryInstructions`) can optionally

@@ -328,7 +328,15 @@ const _kLiveSheetFooter = '--- end current state ---';
 
 String buildLiveSheetBlock(Chat chat) {
   if (!chat.liveSheetEnabled) return '';
-  final active = activeLiveSheetSnapshot(chat);
+  return buildLiveSheetBlockFromSnapshot(activeLiveSheetSnapshot(chat));
+}
+
+/// Story Mode: the snapshot→text rendering core of [buildLiveSheetBlock],
+/// factored out so the story prompt builder can inject the SAME block shape
+/// from a story-owned snapshot (stories are linear — their active snapshot
+/// is simply the latest appended; no pathHash validity applies). The chat
+/// path above delegates here and stays byte-identical.
+String buildLiveSheetBlockFromSnapshot(LiveSheetSnapshot? active) {
   if (active == null) return '';
 
   final buf = StringBuffer();
@@ -666,4 +674,177 @@ void reanchorSnapshotToLatest(Chat chat, LiveSheetSnapshot snapshot) {
   if (idx < 0) return;
   snapshot.anchorMessageId = chat.messages[idx].id;
   snapshot.pathHash = computePathHash(chat.messages, idx);
+}
+
+// ---------------------------------------------------------------------------
+// Story Mode — story-shaped Live Sheet (linear, no pathHash machinery)
+// ---------------------------------------------------------------------------
+//
+// Stories are linear: snapshots are append-only, the ACTIVE snapshot is
+// simply the latest, and every snapshot uses the empty pathHash sentinel
+// (always valid). Anchors are passage ids; "messages since the anchor" scans
+// the ACTIVE chapter's passages (the anchor passage may live in an earlier,
+// concluded chapter — then the whole active chapter counts as new).
+
+/// The active snapshot for a [Story] — the latest appended one.
+LiveSheetSnapshot? activeStoryLiveSheetSnapshot(Story story) =>
+    story.liveSheetSnapshots.isEmpty ? null : story.liveSheetSnapshots.last;
+
+/// Append + cap, mirroring [appendLiveSheetSnapshot]. Linear stories never
+/// strand an active snapshot (it is by definition the last), so a plain
+/// oldest-first prune suffices.
+void appendStoryLiveSheetSnapshot(Story story, LiveSheetSnapshot snap) {
+  story.liveSheetSnapshots.add(snap);
+  if (story.liveSheetSnapshots.length > _kMaxSnapshots) {
+    story.liveSheetSnapshots.removeRange(
+        0, story.liveSheetSnapshots.length - _kMaxSnapshots);
+  }
+}
+
+/// The active chapter's passages that came AFTER the active snapshot's
+/// anchor (all of them when the anchor isn't in this chapter).
+List<Message> _storyPassagesSinceAnchor(Story story, Chapter chapter) {
+  final active = activeStoryLiveSheetSnapshot(story);
+  if (active == null) return chapter.passages;
+  final anchorIdx =
+      chapter.passages.indexWhere((m) => m.id == active.anchorMessageId);
+  return chapter.passages.sublist(anchorIdx + 1);
+}
+
+/// AI-passage count since the active snapshot — the story twin of
+/// [turnsSinceActiveSnapshot]. Counts `char` AND `scene` passages: in story
+/// mode the narrator voice carries as much state change as a character's.
+int storyTurnsSinceSnapshot(Story story, Chapter chapter) {
+  var count = 0;
+  for (final m in _storyPassagesSinceAnchor(story, chapter)) {
+    if (m.kind == MessageKind.char || m.kind == MessageKind.scene) count++;
+  }
+  return count;
+}
+
+bool shouldUpdateStoryLiveSheet(
+    Story story, Chapter chapter, LiveSheetSettings settings) {
+  if (!story.liveSheetEnabled) return false;
+  if (settings.autoEvery <= 0) return false;
+  if (activeStoryLiveSheetSnapshot(story) == null) return false;
+  return storyTurnsSinceSnapshot(story, chapter) >= settings.autoEvery;
+}
+
+/// Story twin of [buildUpdateBody]: current tracked state + the active
+/// chapter's passages since the anchor, labeled with story voices.
+String buildStoryUpdateBody({
+  required Story story,
+  required Chapter chapter,
+  required LiveSheetSnapshot active,
+  String? personaName,
+}) {
+  final buf = StringBuffer();
+  buf.writeln('## Tracked entities and their CURRENT state:');
+  for (final e in active.entities) {
+    buf.writeln('ENTITY: ${e.name}');
+    if (e.kind == LiveSheetEntityKind.user) {
+      buf.writeln(
+          '  (this entity is the author\'s own character — when reporting changes for them, use the exact name "${e.name}")');
+    }
+    for (final s in LiveSheetSection.values) {
+      final facts = e.sections[s]!;
+      if (facts.isEmpty) continue;
+      for (final f in facts) {
+        buf.writeln('  ${s.label}: ${f.text}${f.locked ? '  [LOCKED]' : ''}');
+      }
+    }
+  }
+  buf.writeln();
+  buf.writeln(
+      '## Most recent passages (report only significant, durable changes since the state above):');
+  for (final m in _storyPassagesSinceAnchor(story, chapter)) {
+    final label = switch (m.kind) {
+      MessageKind.scene => 'Narration',
+      MessageKind.user => personaName ?? 'User',
+      MessageKind.char =>
+        story.characterSnapshots[m.characterId]?.name ?? 'Character',
+      MessageKind.ooc => 'OOC',
+      MessageKind.system => 'System',
+    };
+    // AI-written passages (scene AND char in story mode) can carry <think>
+    // reasoning in their stored text — never feed it to the update pass.
+    buf.writeln('$label: ${stripStreamArtifacts(m.text)}');
+  }
+  return buf.toString();
+}
+
+/// Story twin of [generateLiveSheetUpdate]. Anchors the new snapshot to the
+/// chapter's last passage with the empty (always-valid) pathHash sentinel.
+Future<LiveSheetSnapshot?> generateStoryLiveSheetUpdate({
+  required Story story,
+  required Chapter chapter,
+  required ApiProvider provider,
+  required ModelSettings settings,
+  LiveSheetSettings? liveSheetSettings,
+  String? personaName,
+}) async {
+  if (provider.baseUrl.isEmpty) return null;
+  final active = activeStoryLiveSheetSnapshot(story);
+  if (active == null) return null;
+  if (chapter.passages.isEmpty) return null;
+  if (_storyPassagesSinceAnchor(story, chapter).isEmpty) return null;
+  final ls = liveSheetSettings ?? LiveSheetSettings();
+  final turns = <ChatTurn>[
+    ChatTurn('system', ls.updatePrompt),
+    ChatTurn(
+        'user',
+        buildStoryUpdateBody(
+          story: story,
+          chapter: chapter,
+          active: active,
+          personaName: personaName,
+        )),
+  ];
+  try {
+    final out = await completeChatStreamed(
+      provider: provider,
+      settings: _liveSheetSettings(settings),
+      messages: turns,
+      debugTag: 'livesheet',
+    );
+    if (out.trim().isEmpty) {
+      LiveSheetErrors.record(
+          'generateStoryLiveSheetUpdate', 'LLM returned empty response');
+      return null;
+    }
+    final delta = parseLiveSheetDelta(out);
+    if (delta.noChange || delta.ops.isEmpty) return null;
+    return applyLiveSheetDelta(
+      prev: active,
+      delta: delta,
+      anchorMessageId: chapter.passages.last.id,
+      pathHash: '', // linear story — always-valid sentinel
+    );
+  } catch (e) {
+    LiveSheetErrors.record('generateStoryLiveSheetUpdate', e);
+    return null;
+  }
+}
+
+/// Story twin of [ensureLiveSheetSeed]: registers the persona + every real
+/// (non-narrator) cast member with empty sections so tracking can start.
+/// Idempotent; returns true iff a fresh snapshot was appended.
+bool ensureStoryLiveSheetSeed({
+  required Story story,
+  required String? personaName,
+  required Iterable<Character> characters,
+}) {
+  if (!story.liveSheetEnabled) return false;
+  if (activeStoryLiveSheetSnapshot(story) != null) return false;
+  final entities = buildLiveSheetEntities(
+    personaName: personaName,
+    characters: characters,
+  );
+  story.liveSheetSnapshots.add(LiveSheetSnapshot(
+    id: newId('lss'),
+    anchorMessageId: '',
+    pathHash: '', // linear story — always-valid sentinel
+    entities: entities,
+  ));
+  return true;
 }

@@ -608,6 +608,40 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
+      void applyStories() {
+        final list = (updates['stories'] as List?) ?? const [];
+        for (final raw in list) {
+          if (raw is! Map) continue;
+          final m = raw.cast<String, dynamic>();
+          final id = m['id'] as String?;
+          if (id == null) continue;
+          try {
+            final incoming = Story.fromJson(m);
+            if (store.isTombstonedNewer('story', id, incoming.mtime)) {
+              continue;
+            }
+            final idx = store.stories.indexWhere((s) => s.id == id);
+            final force = forcedDecision('story', id);
+            if (idx >= 0) {
+              // Whole-record LWW, same H-4 note as chats: replacing the
+              // story replaces every chapter/passage in it.
+              if (force == false) continue; // keep local on conflict
+              if (force != true &&
+                  store.stories[idx].mtime >= incoming.mtime) {
+                continue;
+              }
+              store.stories[idx] = incoming;
+            } else {
+              store.stories.add(incoming);
+            }
+            appliedAny = true;
+            appliedCount++;
+          } catch (e) {
+            debugPrint('[SyncEngine] skip bad story "$id": $e');
+          }
+        }
+      }
+
       void applyPresets() {
         final list = (updates['presets'] as List?) ?? const [];
         for (final raw in list) {
@@ -928,6 +962,17 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             appliedCount++; // SYNC W5
               }
               break;
+            case 'story':
+              final removed = store.stories
+                  .where((s) => s.id == id && s.mtime < effective)
+                  .isNotEmpty;
+              if (removed) {
+                store.stories
+                    .removeWhere((s) => s.id == id && s.mtime < effective);
+                appliedAny = true;
+                appliedCount++;
+              }
+              break;
             case 'preset':
               // Never reap the locked default — it is rebuilt-from-build on
               // every load and is intentionally never synced/deleted.
@@ -1018,6 +1063,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         applyChars();
         applyPersonas();
         applyChats();
+        applyStories();
         applyPresets();
         applyLorebooks();
         applyRegex();
@@ -1225,6 +1271,10 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           .where((c) => c.mtime > since)
           .map((c) => c.toJson())
           .toList(),
+      'stories': store.stories
+          .where((s) => s.mtime > since)
+          .map((s) => s.toJson())
+          .toList(),
       'presets': store.presets
           .where((p) => p.mtime > since && !p.locked)
           .map((p) => p.toJson())
@@ -1283,6 +1333,10 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
     for (final c in store.chats) {
       addLocal('chat', c.id, c.mtime, c.title ?? 'Chat');
     }
+    for (final s in store.stories) {
+      addLocal('story', s.id, s.mtime,
+          s.title.trim().isEmpty ? 'Story' : s.title);
+    }
     for (final p in store.presets) {
       if (!p.locked) addLocal('preset', p.id, p.mtime, p.name);
     }
@@ -1322,6 +1376,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         (m) => (m['name'] as String?) ?? '');
     addRemoteList('personas', 'persona', (m) => (m['name'] as String?) ?? '');
     addRemoteList('chats', 'chat', (m) => (m['title'] as String?) ?? 'Chat');
+    addRemoteList('stories', 'story', (m) => (m['title'] as String?) ?? 'Story');
     addRemoteList('presets', 'preset', (m) => (m['name'] as String?) ?? '');
     addRemoteList('lorebooks', 'lorebook', (m) => (m['name'] as String?) ?? '');
     addRemoteList('regexRules', 'regexRule', (m) => (m['name'] as String?) ?? '');

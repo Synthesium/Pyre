@@ -69,23 +69,65 @@ List<Lorebook> collectBoundLorebooks({
   required Lorebook? Function(String id) lookupBook,
   required Character? Function(String id) lookupCharacter,
   String? responderId,
+}) =>
+    _collectBoundLorebooksCore(
+      attachedIds: chat.attachedLorebookIds,
+      disabledInheritedIds: chat.disabledInheritedLorebookIds,
+      characterIds: chat.characterIds,
+      characterSnapshots: chat.characterSnapshots,
+      persona: persona,
+      lookupBook: lookupBook,
+      lookupCharacter: lookupCharacter,
+      responderId: responderId,
+    );
+
+/// Story Mode: the same gathering semantics for a [Story] — per-story
+/// attachments are additive, character/persona-inherited bindings honour the
+/// story's disabled-inherited override, snapshots are consulted before the
+/// library. Shares [_collectBoundLorebooksCore] with the chat path so the two
+/// can never drift.
+List<Lorebook> collectStoryLorebooks({
+  required Story story,
+  required Persona? persona,
+  required Lorebook? Function(String id) lookupBook,
+  required Character? Function(String id) lookupCharacter,
+}) =>
+    _collectBoundLorebooksCore(
+      attachedIds: story.attachedLorebookIds,
+      disabledInheritedIds: story.disabledInheritedLorebookIds,
+      characterIds: story.characterIds,
+      characterSnapshots: story.characterSnapshots,
+      persona: persona,
+      lookupBook: lookupBook,
+      lookupCharacter: lookupCharacter,
+    );
+
+List<Lorebook> _collectBoundLorebooksCore({
+  required List<String> attachedIds,
+  required List<String> disabledInheritedIds,
+  required List<String> characterIds,
+  required Map<String, Character> characterSnapshots,
+  required Persona? persona,
+  required Lorebook? Function(String id) lookupBook,
+  required Character? Function(String id) lookupCharacter,
+  String? responderId,
 }) {
-  // Wave CD: per-chat attached books are ALWAYS additive — the user
-  // explicitly attached them to this chat, the disabled-inherited list
-  // doesn't affect them. Only inherited (char + persona) bindings are
-  // subject to the override.
-  final disabled = chat.disabledInheritedLorebookIds.toSet();
-  final ids = <String>{...chat.attachedLorebookIds};
+  // Wave CD: attached books are ALWAYS additive — the user explicitly
+  // attached them to this chat/story, the disabled-inherited list doesn't
+  // affect them. Only inherited (char + persona) bindings are subject to
+  // the override.
+  final disabled = disabledInheritedIds.toSet();
+  final ids = <String>{...attachedIds};
   if (persona != null) {
     for (final id in persona.lorebookIds) {
       if (!disabled.contains(id)) ids.add(id);
     }
   }
-  final chatCharIds = chat.characterIds.isNotEmpty
-      ? chat.characterIds
+  final memberIds = characterIds.isNotEmpty
+      ? characterIds
       : (responderId != null ? <String>[responderId] : const <String>[]);
-  for (final cid in chatCharIds) {
-    final snap = chat.characterSnapshots[cid] ?? lookupCharacter(cid);
+  for (final cid in memberIds) {
+    final snap = characterSnapshots[cid] ?? lookupCharacter(cid);
     if (snap == null) continue;
     for (final id in snap.lorebookIds) {
       if (!disabled.contains(id)) ids.add(id);
